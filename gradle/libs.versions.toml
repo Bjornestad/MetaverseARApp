@@ -1,5 +1,6 @@
 [versions]
 agp = "9.1.0"
+arsceneview = "3.0.0"
 coreKtx = "1.10.1"
 junit = "4.13.2"
 junitVersion = "1.1.5"
@@ -10,9 +11,11 @@ kotlin = "2.2.10"
 composeBom = "2024.09.00"
 arcore = "1.53.0"
 playServicesLocation = "21.3.0"
+playServicesLocationVersion = "21.0.1"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+arsceneview = { module = "io.github.sceneview:arsceneview", version.ref = "arsceneview" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
@@ -28,6 +31,7 @@ androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-te
 androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 arcore = { group = "com.google.ar", name = "core", version.ref = "arcore" }
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
+play-services-location-v2101 = { module = "com.google.android.gms:play-services-location", version.ref = "playServicesLocationVersion" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

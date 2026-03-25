@@ -5,11 +5,11 @@ plugins {
 
 android {
     namespace = "com.example.metaversearapp"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.metaversearapp"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -44,6 +44,8 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.play.services.location.v2101)
+    implementation(libs.arsceneview)
     
     // ARCore and Geospatial dependencies
     implementation(libs.arcore)

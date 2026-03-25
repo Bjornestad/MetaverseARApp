@@ -8,6 +8,9 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <uses-feature android:name="android.hardware.camera.ar" android:required="true" />
+    <uses-feature
+        android:name="android.hardware.camera"
+        android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -19,10 +22,10 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MetaverseARapp">
 
-        <meta-data android:name="com.google.ar.core" android:value="required" />
-        <!-- Replace YOUR_API_KEY with your actual Google Cloud API Key -->
-        <meta-data android:name="com.google.android.ar.API_KEY" android:value="YOUR_API_KEY" />
-
+        <meta-data
+            tools:replace="android:value"
+            android:name="com.google.android.ar.API_KEY"
+            android:value="" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
