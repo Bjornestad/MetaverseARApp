@@ -4,16 +4,21 @@ import android.content.Context
 import android.os.Build
 import android.view.Surface
 import android.view.WindowManager
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.QrLocation
 import com.google.ar.core.Config
+import com.google.ar.core.Earth
+import com.google.ar.core.GeospatialPose
+import com.google.ar.core.TrackingState
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
@@ -41,6 +46,13 @@ fun ARScreen(db: AppDatabase) {
     var selectedDestination by remember { mutableStateOf<QrLocation?>(null) }
     var isDropdownExpanded by remember { mutableStateOf(false) }
     var isScanning by remember { mutableStateOf(false) }
+    
+    // Detailed Geospatial Debug State
+    var geospatialPose by remember { mutableStateOf<GeospatialPose?>(null) }
+    var earthTrackingState by remember { mutableStateOf(TrackingState.STOPPED) }
+    var earthState by remember { mutableStateOf(Earth.EarthState.ENABLED) }
+    var isEarthObjectNull by remember { mutableStateOf(true) }
+    var sessionGeospatialSupport by remember { mutableStateOf("Checking...") }
     
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
 
@@ -87,11 +99,28 @@ fun ARScreen(db: AppDatabase) {
         Box(modifier = Modifier.fillMaxSize()) {
             ARScene(
                 modifier = Modifier.fillMaxSize(),
-                sessionConfiguration = { _, config ->
+                sessionConfiguration = { session, config ->
+                    val isSupported = session.isGeospatialModeSupported(Config.GeospatialMode.ENABLED)
+                    sessionGeospatialSupport = if (isSupported) "Supported" else "NOT Supported on this device"
+                    
                     config.geospatialMode = Config.GeospatialMode.ENABLED
                     config.focusMode = Config.FocusMode.AUTO
                 },
-                onSessionUpdated = { _, frame ->
+                onSessionUpdated = { session, frame ->
+                    // Update Geospatial Data
+                    val earth = session.earth
+                    if (earth != null) {
+                        isEarthObjectNull = false
+                        earthState = earth.earthState
+                        earthTrackingState = earth.trackingState
+                        if (earthTrackingState == TrackingState.TRACKING) {
+                            geospatialPose = earth.cameraGeospatialPose
+                        }
+                    } else {
+                        isEarthObjectNull = true
+                        earthTrackingState = TrackingState.STOPPED
+                    }
+
                     val currentTime = System.currentTimeMillis()
                     if (isScanning && (currentTime - lastProcessingTime > 1000)) {
                         try {
@@ -143,6 +172,7 @@ fun ARScreen(db: AppDatabase) {
                 }
             )
             
+            // Top UI
             Column(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -223,10 +253,105 @@ fun ARScreen(db: AppDatabase) {
                     }
                 }
             }
+
+            // Bottom UI - Geospatial Status
+            GeospatialBottomOverlay(
+                pose = geospatialPose,
+                trackingState = earthTrackingState,
+                earthState = earthState,
+                isEarthNull = isEarthObjectNull,
+                supportInfo = sessionGeospatialSupport,
+                modifier = Modifier.align(Alignment.BottomCenter)
+            )
         }
     } else {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Camera Permission Required")
+        }
+    }
+}
+
+@Composable
+fun GeospatialBottomOverlay(
+    pose: GeospatialPose?,
+    trackingState: TrackingState,
+    earthState: Earth.EarthState,
+    isEarthNull: Boolean,
+    supportInfo: String,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .padding(16.dp)
+            .fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = "VPS Diagnostic:",
+                    style = MaterialTheme.typography.labelLarge
+                )
+                val statusColor = if (trackingState == TrackingState.TRACKING) Color(0xFF4CAF50) else Color(0xFFF44336)
+                Text(
+                    text = trackingState.name,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = statusColor,
+                    modifier = Modifier
+                        .background(statusColor.copy(alpha = 0.1f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+            
+            Text("Device Support: $supportInfo", style = MaterialTheme.typography.labelSmall)
+            Text(
+                "Earth State: ${earthState.name} ${if (isEarthNull) "(Object is NULL)" else ""}",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (earthState == Earth.EarthState.ENABLED && !isEarthNull) Color.Unspecified else Color.Red
+            )
+
+            if (pose != null && trackingState == TrackingState.TRACKING) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = String.format(Locale.US, "Lat: %.6f, Lon: %.6f", pose.latitude, pose.longitude),
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = String.format(Locale.US, "Alt: %.2fm | Accuracy: %.2fm", pose.altitude, pose.horizontalAccuracy),
+                    style = MaterialTheme.typography.bodySmall
+                )
+                Text(
+                    text = String.format(Locale.US, "Yaw Accur: %.1f° | Heading: %.1f°", pose.orientationYawAccuracy, pose.heading),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            } else {
+                Spacer(modifier = Modifier.height(4.dp))
+                val debugHint = when {
+                    isEarthNull -> "CRITICAL: ARCore session failed to create Earth object."
+                    earthState == Earth.EarthState.ERROR_NOT_AUTHORIZED -> "AUTH ERROR: SHA-1 or Package Name mismatch in Cloud Console."
+                    earthState == Earth.EarthState.ERROR_GEOSPATIAL_MODE_DISABLED -> "MODE ERROR: Geospatial mode not enabled in config."
+                    trackingState == TrackingState.PAUSED -> "PAUSED: Move camera around to find buildings."
+                    else -> "LOCALIZING: Point camera at building facades across the street."
+                }
+                Text(
+                    text = debugHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
         }
     }
 }

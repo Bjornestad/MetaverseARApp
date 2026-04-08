@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.metaversearapp"
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.CAMERA" />
@@ -22,10 +23,13 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MetaverseARapp">
 
+        <!-- ARCore Keyless authentication configuration -->
         <meta-data
-            tools:replace="android:value"
-            android:name="com.google.android.ar.API_KEY"
-            android:value="AIzaSyDCSgTRKue1MYRoKYAt2S1DOa_rA81pahs" />
+            android:name="com.google.android.ar.AUTH_MODE"
+            android:value="OAUTH_CLIENT_ID" />
+        <meta-data
+            android:name="com.google.ar.core.geospatial"
+            android:value="enabled" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
