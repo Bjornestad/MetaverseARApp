@@ -25,7 +25,7 @@
         <meta-data
             tools:replace="android:value"
             android:name="com.google.android.ar.API_KEY"
-            android:value="" />
+            android:value="AIzaSyDCSgTRKue1MYRoKYAt2S1DOa_rA81pahs" />
         <activity
             android:name=".MainActivity"
             android:exported="true"
