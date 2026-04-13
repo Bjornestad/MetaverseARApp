@@ -23,13 +23,16 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MetaverseARapp">
 
-        <!-- ARCore Keyless authentication configuration -->
+        <!-- ARCore API Key authentication configuration -->
         <meta-data
             android:name="com.google.android.ar.AUTH_MODE"
-            android:value="OAUTH_CLIENT_ID" />
+            android:value="API_KEY" />
+
+        <!-- This value is injected from local.properties via build.gradle.kts -->
         <meta-data
-            android:name="com.google.ar.core.geospatial"
-            android:value="enabled" />
+            android:name="com.google.android.ar.API_KEY"
+            android:value="${arcoreApiKey}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

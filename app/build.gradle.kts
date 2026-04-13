@@ -1,8 +1,16 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
+}
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.inputStream())
 }
 
 android {
@@ -15,7 +23,10 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-
+        
+        // Use the key from local.properties, or empty string if not found
+        manifestPlaceholders["arcoreApiKey"] = localProperties.getProperty("ARCORE_API_KEY") ?: ""
+        
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -60,6 +71,7 @@ dependencies {
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.compose.material.icons.extended)
     
     // AR & Location
     implementation(libs.arsceneview)
@@ -72,6 +84,8 @@ dependencies {
     // Room Database
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
+    implementation(libs.rendering)
+    implementation(libs.androidx.room.ktx)
     ksp(libs.room.compiler)
 
     // Networking
