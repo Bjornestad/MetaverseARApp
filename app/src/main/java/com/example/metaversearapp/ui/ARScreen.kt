@@ -20,6 +20,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.ui.components.ARUiOverlay
@@ -47,7 +48,7 @@ import kotlinx.coroutines.launch
 fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARViewModel.Factory(db))) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
 
     val engine = rememberEngine()
     val materialLoader = rememberMaterialLoader(engine)
