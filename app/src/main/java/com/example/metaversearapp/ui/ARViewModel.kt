@@ -18,7 +18,9 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.http.ContentType
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 
 class ARViewModel(private val db: AppDatabase) : ViewModel() {
@@ -69,15 +71,21 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                         json(Json { ignoreUnknownKeys = true; coerceInputValues = true }, contentType = ContentType.Any)
                     }
                 }
+                
                 val gistUrl = "https://gist.githubusercontent.com/Bjornestad/3b90e3bd67e9cd9a4bce90fb14f158e9/raw"
-                val response: List<QrFeature> = client.get(gistUrl).body()
-                db.qrDao().insertAll(response.map { it.toEntity() })
-                allLocations = db.qrDao().getAll()
+                
+                val locations = withContext(Dispatchers.IO) {
+                    val response: List<QrFeature> = client.get(gistUrl).body()
+                    db.qrDao().insertAll(response.map { it.toEntity() })
+                    db.qrDao().getAll()
+                }
+                
+                allLocations = locations
                 statusText = "Ready: Select Destination"
                 client.close()
             } catch (e: Exception) {
                 statusText = "Sync Failed: ${e.localizedMessage}"
-                allLocations = db.qrDao().getAll()
+                allLocations = withContext(Dispatchers.IO) { db.qrDao().getAll() }
             }
         }
     }
@@ -94,7 +102,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
      */
     fun onQrScanned(qrId: String, scanPose: GeospatialPose) {
         viewModelScope.launch {
-            val loc = db.qrDao().getById(qrId)
+            val loc = withContext(Dispatchers.IO) { db.qrDao().getById(qrId) }
             if (loc != null) {
                 // Calculation: How much is the VPS wrong by?
                 latOffset = scanPose.latitude - loc.lat
