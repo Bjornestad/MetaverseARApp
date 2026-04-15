@@ -1,8 +1,12 @@
 package com.example.metaversearapp.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.view.Surface
 import android.view.WindowManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -12,6 +16,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color as ComposeColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -48,6 +53,32 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
     val materialLoader = rememberMaterialLoader(engine)
     val modelLoader = rememberModelLoader(engine)
 
+    // --- PERMISSIONS ---
+    val permissions = arrayOf(
+        Manifest.permission.CAMERA,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    )
+
+    var permissionsGranted by remember {
+        mutableStateOf(
+            permissions.all {
+                ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
+            }
+        )
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        permissionsGranted = result.values.all { it }
+    }
+
+    LaunchedEffect(Unit) {
+        if (!permissionsGranted) {
+            launcher.launch(permissions)
+        }
+    }
+
     // --- SAFETY & LIFECYCLE STATE ---
     var canRenderAR by remember { mutableStateOf(false) }
 
@@ -80,13 +111,6 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
         onDispose { scanner.close() }
     }
 
-    val cameraPermissionState = remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        cameraPermissionState.value = androidx.core.content.ContextCompat.checkSelfPermission(
-            context, android.Manifest.permission.CAMERA
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    }
-
     // --- ANCHOR LOGIC ---
     LaunchedEffect(
         viewModel.selectedDestination,
@@ -110,7 +134,7 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
         }
     }
 
-    if (cameraPermissionState.value) {
+    if (permissionsGranted) {
         Box(modifier = Modifier.fillMaxSize()) {
 
             // --- LAYER 1: AR SCENE ---
@@ -176,10 +200,10 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
                     roomAnchor?.let { anchor ->
                         AnchorNode(anchor = anchor) {
                             CubeNode(
-                                size = Float3(2.0f, 2.0f, 2.0f), // Increased from 0.5f to 2.0f
-                                center = Position(0f, 1.0f, 0f), // Adjusted center so it sits on the anchor point
+                                size = Float3(20.0f, 100.0f, 20.0f), // 20m wide/deep, 100m tall
+                                center = Position(0f, 50.0f, 0f), // Half of height so it starts at the anchor
                                 materialInstance = remember(materialLoader) {
-                                    materialLoader.createColorInstance(color = SceneViewColor(0.0f, 1.0f, 1.0f, 1.0f))
+                                    materialLoader.createColorInstance(color = SceneViewColor(1.0f, 0.0f, 0.0f, 1.0f))
                                 }
                             )
                         }
@@ -196,7 +220,13 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
         }
     } else {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("Camera Permission Required")
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text("Camera and Location Permissions Required")
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = { launcher.launch(permissions) }) {
+                    Text("Grant Permissions")
+                }
+            }
         }
     }
 }
