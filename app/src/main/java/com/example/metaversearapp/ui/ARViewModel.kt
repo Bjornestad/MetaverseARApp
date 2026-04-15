@@ -40,7 +40,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var earthState by mutableStateOf(Earth.EarthState.ENABLED)
     var isEarthObjectNull by mutableStateOf(true)
 
-    // Using Double for high-precision VPS offsets
+    // VPS Calibration Offsets
     var latOffset by mutableDoubleStateOf(0.0)
         private set
     var lonOffset by mutableDoubleStateOf(0.0)
@@ -48,6 +48,12 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var altOffset by mutableDoubleStateOf(0.0)
         private set
     var isCalibrated by mutableStateOf(false)
+        private set
+
+    // Accuracy Metrics
+    var horizontalAccuracy by mutableDoubleStateOf(0.0)
+        private set
+    var verticalAccuracy by mutableDoubleStateOf(0.0)
         private set
 
     init {
@@ -82,17 +88,28 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         statusText = "Targeting ${location.name}"
     }
 
+    /**
+     * Snap the current VPS coordinate system to the QR code's ground truth.
+     * This "overwrites" the drift by calculating the delta between VPS and Reality.
+     */
     fun onQrScanned(qrId: String, scanPose: GeospatialPose) {
         viewModelScope.launch {
             val loc = db.qrDao().getById(qrId)
             if (loc != null) {
-                // Calculate precision offsets: Current VPS - Recorded Coordinate
+                // Calculation: How much is the VPS wrong by?
                 latOffset = scanPose.latitude - loc.lat
                 lonOffset = scanPose.longitude - loc.lon
                 altOffset = scanPose.altitude - loc.alt
+                
                 isCalibrated = true
                 isScanning = false
-                statusText = "Calibrated at ${loc.name}"
+                
+                // Provide feedback based on quality, but ALWAYS accept the fix
+                statusText = if (scanPose.horizontalAccuracy > 1.5) {
+                    "Calibrated at ${loc.name} (Low VPS confidence)"
+                } else {
+                    "Calibrated at ${loc.name}"
+                }
             } else {
                 statusText = "Unknown QR Code: $qrId"
             }
@@ -110,12 +127,26 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             earthState = earth.earthState
             earthTrackingState = earth.trackingState
             if (earthTrackingState == TrackingState.TRACKING) {
-                geospatialPose = earth.cameraGeospatialPose
+                val pose = earth.cameraGeospatialPose
+                geospatialPose = pose
+                horizontalAccuracy = pose.horizontalAccuracy
+                verticalAccuracy = pose.verticalAccuracy
+            } else {
+                geospatialPose = null
             }
         } else {
             isEarthObjectNull = true
             earthTrackingState = TrackingState.STOPPED
+            geospatialPose = null
         }
+    }
+
+    /**
+     * Returns the "Snapped" coordinates (Current VPS - Calculated Drift)
+     */
+    fun getCorrectedPose(): Pair<Double, Double>? {
+        val pose = geospatialPose ?: return null
+        return Pair(pose.latitude - latOffset, pose.longitude - lonOffset)
     }
 
     class Factory(private val db: AppDatabase) : ViewModelProvider.Factory {

@@ -50,11 +50,9 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
 
     // --- SAFETY & LIFECYCLE STATE ---
     var canRenderAR by remember { mutableStateOf(false) }
-    var currentLifecycleState by remember { mutableStateOf(Lifecycle.State.INITIALIZED) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            currentLifecycleState = event.targetState
             if (event == Lifecycle.Event.ON_RESUME) {
                 scope.launch {
                     delay(500) // Hardware cooling delay
@@ -62,6 +60,7 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
                 }
             } else if (event == Lifecycle.Event.ON_PAUSE) {
                 canRenderAR = false
+                viewModel.isScanning = false // Prevent background processing
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -76,6 +75,10 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
         val options = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
         BarcodeScanning.getClient(options)
     }
+    
+    DisposableEffect(scanner) {
+        onDispose { scanner.close() }
+    }
 
     val cameraPermissionState = remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
@@ -85,7 +88,6 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
     }
 
     // --- ANCHOR LOGIC ---
-    // Critical for VPS precision: Re-create the anchor whenever destination, calibration offsets, OR the Earth session object changes.
     LaunchedEffect(
         viewModel.selectedDestination,
         viewModel.isCalibrated,
@@ -132,32 +134,41 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
                             val currentTime = System.currentTimeMillis()
                             
                             if (viewModel.isScanning && (currentTime - lastProcessingTime > 1000)) {
-                                try {
-                                    if (currentLifecycleState == Lifecycle.State.RESUMED) {
+                                if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                                    try {
                                         val image = frame.acquireCameraImage()
                                         lastProcessingTime = currentTime
 
-                                        val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                            context.display?.rotation ?: Surface.ROTATION_0
-                                        } else {
-                                            @Suppress("DEPRECATION")
-                                            (context.getSystemService(android.content.Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
-                                        }
-
-                                        val inputImage = InputImage.fromMediaImage(image, when(rotation) {
-                                            Surface.ROTATION_90 -> 0; Surface.ROTATION_180 -> 270; Surface.ROTATION_270 -> 180; else -> 90
-                                        })
-
-                                        scanner.process(inputImage)
-                                            .addOnSuccessListener { barcodes ->
-                                                if (barcodes.isNotEmpty()) {
-                                                    val id = barcodes[0].rawValue ?: return@addOnSuccessListener
-                                                    viewModel.onQrScanned(id, pose)
-                                                }
+                                        try {
+                                            val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                                                context.display?.rotation ?: Surface.ROTATION_0
+                                            } else {
+                                                @Suppress("DEPRECATION")
+                                                (context.getSystemService(android.content.Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
                                             }
-                                            .addOnCompleteListener { image.close() }
+
+                                            val inputImage = InputImage.fromMediaImage(image, when(rotation) {
+                                                Surface.ROTATION_90 -> 0; Surface.ROTATION_180 -> 270; Surface.ROTATION_270 -> 180; else -> 90
+                                            })
+
+                                            scanner.process(inputImage)
+                                                .addOnSuccessListener { barcodes ->
+                                                    if (barcodes.isNotEmpty()) {
+                                                        val id = barcodes[0].rawValue ?: return@addOnSuccessListener
+                                                        viewModel.onQrScanned(id, pose)
+                                                    }
+                                                }
+                                                .addOnCompleteListener { 
+                                                    try { image.close() } catch (_: Exception) {}
+                                                }
+                                        } catch (e: Exception) {
+                                            image.close()
+                                            throw e
+                                        }
+                                    } catch (e: Exception) {
+                                        // Silent catch for ARCore buffer/session exceptions
                                     }
-                                } catch (e: Exception) { /* Native buffer safety */ }
+                                }
                             }
                         }
                     }
@@ -165,8 +176,8 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
                     roomAnchor?.let { anchor ->
                         AnchorNode(anchor = anchor) {
                             CubeNode(
-                                size = Float3(0.5f, 0.5f, 0.5f),
-                                center = Position(0f, 0.25f, 0f),
+                                size = Float3(2.0f, 2.0f, 2.0f), // Increased from 0.5f to 2.0f
+                                center = Position(0f, 1.0f, 0f), // Adjusted center so it sits on the anchor point
                                 materialInstance = remember(materialLoader) {
                                     materialLoader.createColorInstance(color = SceneViewColor(0.0f, 1.0f, 1.0f, 1.0f))
                                 }

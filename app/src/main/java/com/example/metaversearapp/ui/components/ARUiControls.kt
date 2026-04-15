@@ -46,13 +46,7 @@ fun ARUiOverlay(viewModel: ARViewModel) {
                 )
             }
 
-            GeospatialBottomOverlay(
-                pose = viewModel.geospatialPose,
-                trackingState = viewModel.earthTrackingState,
-                earthState = viewModel.earthState,
-                isEarthNull = viewModel.isEarthObjectNull,
-                isCalibrated = viewModel.isCalibrated
-            )
+            GeospatialBottomOverlay(viewModel = viewModel)
         }
     }
 }
@@ -77,8 +71,7 @@ fun DestinationSelector(viewModel: ARViewModel) {
                         DropdownMenuItem(
                             text = { Text(loc.name) },
                             onClick = {
-                                viewModel.selectedDestination = loc
-                                viewModel.isDropdownExpanded = false
+                                viewModel.onDestinationSelected(loc)
                             }
                         )
                     }
