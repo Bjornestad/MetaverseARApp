@@ -74,15 +74,25 @@ fun ARScreen(db: AppDatabase) {
             currentLifecycleState = event.targetState
             if (event == Lifecycle.Event.ON_RESUME) {
                 scope.launch {
-                    delay(500) // Hardware cooling delay
-                    canRenderAR = true
+                    delay(500) // Hardware warmup delay
+                    // Guard: only enable AR if we are STILL in resumed state after the delay.
+                    // Without this check, a quick home-swipe during the 500ms window causes
+                    // the delayed coroutine to set canRenderAR=true after ON_PAUSE has already
+                    // fired, mounting ARScene while the app is in background. That triggers the
+                    // MediaPipe RET_CHECK race condition logged in scheduler.cc.
+                    if (currentLifecycleState == Lifecycle.State.RESUMED) {
+                        canRenderAR = true
+                    }
                 }
-            } else if (event == Lifecycle.Event.ON_PAUSE) {
+            } else if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
                 canRenderAR = false
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            canRenderAR = false
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
     }
 
     // --- APP STATE ---
@@ -142,15 +152,28 @@ fun ARScreen(db: AppDatabase) {
 
     // --- ANCHOR LOGIC ---
     LaunchedEffect(selectedDestination, isCalibrated, earthTrackingState) {
+        // Always detach the previous anchor to avoid resource leaks. ARCore anchors
+        // are native objects; orphaning them causes memory pressure over time.
+        roomAnchor?.detach()
+        roomAnchor = null
+
         val currentEarth = earthRef.value
         val dest = selectedDestination
-        if (currentEarth != null && earthTrackingState == TrackingState.TRACKING && dest != null) {
-            roomAnchor = currentEarth.createAnchor(
-                dest.lat + latOffset,
-                dest.lon + lonOffset,
-                dest.alt + altOffset,
-                0f, 0f, 0f, 1f
-            )
+        // Require calibration so we don't place a cube at raw GPS coords (which can be
+        // many metres off indoors) before the QR offset has been established.
+        if (currentEarth != null && earthTrackingState == TrackingState.TRACKING
+            && dest != null && isCalibrated) {
+            try {
+                roomAnchor = currentEarth.createAnchor(
+                    dest.lat + latOffset,
+                    dest.lon + lonOffset,
+                    dest.alt + altOffset,
+                    0f, 0f, 0f, 1f
+                )
+            } catch (e: Exception) {
+                // createAnchor can throw if the session is in a bad state
+                // (e.g. Earth not yet TRACKING). Safe to swallow; next frame will retry.
+            }
         }
     }
 
@@ -158,7 +181,10 @@ fun ARScreen(db: AppDatabase) {
         Box(modifier = Modifier.fillMaxSize()) {
 
             // --- LAYER 1: AR SCENE (SAFE GATED) ---
-            if (canRenderAR) {
+            // Double-gate: canRenderAR (delayed flag) AND actual lifecycle state.
+            // canRenderAR alone is not enough — it could theoretically become stale
+            // if the state machine is re-entered before Compose re-composes.
+            if (canRenderAR && currentLifecycleState == Lifecycle.State.RESUMED) {
                 ARScene(
                     modifier = Modifier.fillMaxSize(),
                     engine = engine,
