@@ -13,5 +13,5 @@ interface QrDao {
     suspend fun getAll(): List<QrLocation>
 
     @Upsert
-    suspend fun insertAll(locations: List<QrLocation>)
+    suspend fun insertAll(locations: List<QrLocation>): List<Long>
 }
