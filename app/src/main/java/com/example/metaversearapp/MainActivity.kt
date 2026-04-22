@@ -3,9 +3,11 @@ package com.example.metaversearapp
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.runtime.*
 import androidx.room.Room
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.ui.ARScreen
+import com.example.metaversearapp.ui.AdminScreen
 import com.example.metaversearapp.ui.theme.MetaverseARappTheme
 
 class MainActivity : ComponentActivity() {
@@ -16,10 +18,22 @@ class MainActivity : ComponentActivity() {
         db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "ar-db")
             .fallbackToDestructiveMigration()
             .build()
-        
+
         setContent {
             MetaverseARappTheme {
-                ARScreen(db)
+                var isAdminMode by remember { mutableStateOf(false) }
+
+                if (isAdminMode) {
+                    AdminScreen(
+                        db           = db,
+                        onExitAdmin  = { isAdminMode = false }
+                    )
+                } else {
+                    ARScreen(
+                        db             = db,
+                        onAdminRequest = { isAdminMode = true }
+                    )
+                }
             }
         }
     }

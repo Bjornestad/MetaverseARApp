@@ -46,20 +46,6 @@ android {
     buildFeatures {
         compose = true
     }
-
-    // Explicitly add KSP generated directories to the source sets
-    // to satisfy AGP 9.0+ "built-in Kotlin" requirements.
-    sourceSets {
-        getByName("main") {
-            kotlin.srcDir("build/generated/ksp/main/kotlin")
-        }
-        getByName("debug") {
-            kotlin.srcDir("build/generated/ksp/debug/kotlin")
-        }
-        getByName("release") {
-            kotlin.srcDir("build/generated/ksp/release/kotlin")
-        }
-    }
 }
 
 dependencies {

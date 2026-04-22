@@ -41,6 +41,9 @@ import io.github.sceneview.node.CubeNode
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberMaterialLoader
 import io.github.sceneview.rememberModelLoader
+import com.example.metaversearapp.data.NavGraphPathfinder
+import com.example.metaversearapp.data.NavNode
+import androidx.compose.material.icons.filled.AdminPanelSettings
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.android.*
@@ -56,7 +59,7 @@ import kotlin.math.*
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ARScreen(db: AppDatabase) {
+fun ARScreen(db: AppDatabase, onAdminRequest: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -115,6 +118,21 @@ fun ARScreen(db: AppDatabase) {
     var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
 
+    // --- PATH / BREADCRUMBS ---
+    // Loaded once after calibration, re-computed when destination changes.
+    var allNavNodes by remember { mutableStateOf<List<NavNode>>(emptyList()) }
+    var allNavEdges by remember { mutableStateOf<List<com.example.metaversearapp.data.NavEdge>>(emptyList()) }
+    var pathNodes   by remember { mutableStateOf<List<NavNode>>(emptyList()) }
+    // Live list of anchors for the breadcrumb trail. Stored as Compose state so
+    // recomposition removes detached crumbs from the ARScene content block.
+    var crumbAnchors by remember { mutableStateOf<List<Anchor>>(emptyList()) }
+
+    // Load nav graph from DB once
+    LaunchedEffect(Unit) {
+        allNavNodes = db.navDao().getAllNodes()
+        allNavEdges = db.navDao().getAllEdges()
+    }
+
     val scanner = remember {
         val options = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
         BarcodeScanning.getClient(options)
@@ -150,17 +168,13 @@ fun ARScreen(db: AppDatabase) {
 
     val earthRef = remember { mutableStateOf<Earth?>(null) }
 
-    // --- ANCHOR LOGIC ---
+    // --- ANCHOR LOGIC (destination cube) ---
     LaunchedEffect(selectedDestination, isCalibrated, earthTrackingState) {
-        // Always detach the previous anchor to avoid resource leaks. ARCore anchors
-        // are native objects; orphaning them causes memory pressure over time.
         roomAnchor?.detach()
         roomAnchor = null
 
         val currentEarth = earthRef.value
         val dest = selectedDestination
-        // Require calibration so we don't place a cube at raw GPS coords (which can be
-        // many metres off indoors) before the QR offset has been established.
         if (currentEarth != null && earthTrackingState == TrackingState.TRACKING
             && dest != null && isCalibrated) {
             try {
@@ -170,11 +184,55 @@ fun ARScreen(db: AppDatabase) {
                     dest.alt + altOffset,
                     0f, 0f, 0f, 1f
                 )
-            } catch (e: Exception) {
-                // createAnchor can throw if the session is in a bad state
-                // (e.g. Earth not yet TRACKING). Safe to swallow; next frame will retry.
-            }
+            } catch (_: Exception) { }
         }
+    }
+
+    // --- PATH COMPUTATION + BREADCRUMB ANCHORS ---
+    LaunchedEffect(selectedDestination, isCalibrated, earthTrackingState) {
+        // Detach all existing crumb anchors first
+        crumbAnchors.forEach { it.detach() }
+        crumbAnchors = emptyList()
+        pathNodes    = emptyList()
+
+        val currentEarth = earthRef.value
+        val pose = geospatialPose
+        val dest = selectedDestination
+
+        if (currentEarth == null || !isCalibrated || pose == null ||
+            dest == null || earthTrackingState != TrackingState.TRACKING) return@LaunchedEffect
+        if (allNavNodes.isEmpty()) return@LaunchedEffect
+
+        // Find nearest node to user's calibrated position
+        val userLat  = pose.latitude  - latOffset
+        val userLon  = pose.longitude - lonOffset
+        val startNode = NavGraphPathfinder.nearestNode(allNavNodes, userLat, userLon)
+            ?: return@LaunchedEffect
+
+        // Find nearest node to destination
+        val goalNode = allNavNodes.firstOrNull { it.anchorQrId == dest.qrID }
+            ?: NavGraphPathfinder.nearestNode(allNavNodes, dest.lat, dest.lon)
+            ?: return@LaunchedEffect
+
+        val path = NavGraphPathfinder.aStar(allNavNodes, allNavEdges, startNode.id, goalNode.id)
+        if (path.isEmpty()) return@LaunchedEffect
+
+        pathNodes = path
+
+        // Create anchors for each waypoint (skip first — that's roughly where user stands)
+        val newAnchors = mutableListOf<Anchor>()
+        for (node in path.drop(1)) {
+            try {
+                val anchor = currentEarth.createAnchor(
+                    node.lat + latOffset,
+                    node.lon + lonOffset,
+                    node.alt + altOffset,
+                    0f, 0f, 0f, 1f
+                )
+                newAnchors.add(anchor)
+            } catch (_: Exception) { }
+        }
+        crumbAnchors = newAnchors
     }
 
     if (cameraPermissionState.value) {
@@ -206,6 +264,21 @@ fun ARScreen(db: AppDatabase) {
                             if (earthTrackingState == TrackingState.TRACKING) {
                                 val pose = currentEarth.cameraGeospatialPose
                                 geospatialPose = pose
+
+                                // Tick off passed breadcrumbs
+                                if (crumbAnchors.isNotEmpty() && pathNodes.size > 1) {
+                                    val nextNode = pathNodes[1]
+                                    val dist = NavGraphPathfinder.haversine(
+                                        pose.latitude  - latOffset,
+                                        pose.longitude - lonOffset,
+                                        nextNode.lat, nextNode.lon
+                                    )
+                                    if (dist < 3.0) { // within 3 metres → passed it
+                                        crumbAnchors.firstOrNull()?.detach()
+                                        crumbAnchors = crumbAnchors.drop(1)
+                                        pathNodes    = pathNodes.drop(1)
+                                    }
+                                }
 
                                 val currentTime = System.currentTimeMillis()
                                 if (isScanning && (currentTime - lastProcessingTime > 1000)) {
@@ -250,6 +323,7 @@ fun ARScreen(db: AppDatabase) {
                         }
                     }
                 ) {
+                    // Destination marker — larger cyan cube
                     roomAnchor?.let { anchor ->
                         AnchorNode(anchor = anchor) {
                             CubeNode(
@@ -261,6 +335,22 @@ fun ARScreen(db: AppDatabase) {
                             )
                         }
                     }
+                    // Breadcrumb trail — small green dots floating at chest height
+                    crumbAnchors.forEachIndexed { index, anchor ->
+                        AnchorNode(anchor = anchor) {
+                            CubeNode(
+                                size   = Float3(0.12f, 0.12f, 0.12f),
+                                center = Position(0f, 1.2f, 0f),
+                                materialInstance = materialLoader.createColorInstance(
+                                    // First crumb is brighter — next immediate waypoint
+                                    color = if (index == 0)
+                                        SceneViewColor(0.0f, 1.0f, 0.4f, 1.0f)
+                                    else
+                                        SceneViewColor(0.0f, 0.7f, 0.3f, 0.8f)
+                                )
+                            )
+                        }
+                    }
                 }
             } else {
                 Box(modifier = Modifier.fillMaxSize().background(ComposeColor.Black), contentAlignment = Alignment.Center) {
@@ -269,10 +359,43 @@ fun ARScreen(db: AppDatabase) {
             }
 
             // --- LAYER 2: UI OVERLAYS (ALWAYS VISIBLE) ---
+            // Admin mode button — top-right corner
+            IconButton(
+                onClick  = onAdminRequest,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 16.dp, end = 8.dp)
+            ) {
+                Icon(
+                    Icons.Default.AdminPanelSettings,
+                    contentDescription = "Admin",
+                    tint = ComposeColor.White.copy(alpha = 0.7f),
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
             Column(
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
+                // Show path info when navigating
+                if (pathNodes.isNotEmpty() && isCalibrated) {
+                    val remaining = pathNodes.size - 1
+                    Card(
+                        modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth(),
+                        colors   = CardDefaults.cardColors(
+                            containerColor = ComposeColor(0xFF1A3A1A).copy(alpha = 0.9f)
+                        )
+                    ) {
+                        Text(
+                            "🟢 Path: $remaining waypoints remaining",
+                            modifier = Modifier.padding(10.dp),
+                            color    = ComposeColor(0xFF64FFDA),
+                            style    = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
                 StatusOverlay(statusText)
                 Spacer(modifier = Modifier.height(8.dp))
 
