@@ -85,8 +85,6 @@ dependencies {
     // Room Database
     implementation(libs.room.runtime)
     implementation(libs.room.ktx)
-    implementation(libs.rendering)
-    implementation(libs.androidx.room.ktx)
     ksp(libs.room.compiler)
 
     // Networking

@@ -49,7 +49,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         private set
     var altOffset by mutableDoubleStateOf(0.0)
         private set
-    var isCalibrated by mutableStateOf(false)
+    var isCalibrated by mutableStateOf(true)
         private set
 
     // Accuracy Metrics
@@ -126,7 +126,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
 
     fun toggleScanning() {
         isScanning = !isScanning
-        statusText = if (isScanning) "2. Scan Room QR to Calibrate..." else "Ready"
+        statusText = if (isScanning) "Scanning QR to improve accuracy..." else "Ready"
     }
 
     fun updateGeospatialState(earth: Earth?) {

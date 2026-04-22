@@ -29,7 +29,7 @@ fun ARUiOverlay(viewModel: ARViewModel) {
                     containerColor = if (viewModel.isScanning) Color.Red else MaterialTheme.colorScheme.primary
                 )
             ) {
-                Text(if (viewModel.isScanning) "Cancel Scan" else "Scan QR to Calibrate")
+                Text(if (viewModel.isScanning) "Cancel Scan" else "Scan QR to Improve Accuracy")
             }
         }
 
@@ -37,7 +37,7 @@ fun ARUiOverlay(viewModel: ARViewModel) {
             modifier = Modifier.align(Alignment.BottomCenter),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            if (viewModel.selectedDestination != null && viewModel.geospatialPose != null && viewModel.isCalibrated) {
+            if (viewModel.selectedDestination != null && viewModel.geospatialPose != null) {
                 NavigationArrow(
                     currentPose = viewModel.geospatialPose!!,
                     destination = viewModel.selectedDestination!!,
@@ -58,7 +58,7 @@ fun DestinationSelector(viewModel: ARViewModel) {
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f))
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
-            Text("1. Target Destination:", style = MaterialTheme.typography.labelMedium)
+            Text("Target Destination:", style = MaterialTheme.typography.labelMedium)
             Box {
                 OutlinedButton(onClick = { viewModel.isDropdownExpanded = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(viewModel.selectedDestination?.name ?: "Select Room")
