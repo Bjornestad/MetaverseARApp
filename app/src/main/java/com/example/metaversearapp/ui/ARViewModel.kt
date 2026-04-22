@@ -58,6 +58,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var verticalAccuracy by mutableDoubleStateOf(0.0)
         private set
 
+    // Test Anchors — each press appends; existing ones are never replaced.
+    data class PlacedAnchor(val lat: Double, val lon: Double, val alt: Double)
+    var placedAnchors by mutableStateOf<List<PlacedAnchor>>(emptyList())
+        private set
+
     init {
         syncLocations()
     }
@@ -122,6 +127,23 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 statusText = "Unknown QR Code: $qrId"
             }
         }
+    }
+
+    /**
+     * Appends a new green test cube at the user's current geospatial position.
+     * Each press adds a new permanent marker; existing ones are never touched.
+     */
+    fun placeTestAnchor() {
+        val pose = geospatialPose ?: run {
+            statusText = "No geospatial lock yet — try again in a moment"
+            return
+        }
+        placedAnchors = placedAnchors + PlacedAnchor(
+            lat = pose.latitude,
+            lon = pose.longitude,
+            alt = pose.altitude - 1.7  // Drop to floor level
+        )
+        statusText = "Test object placed (${placedAnchors.size} total)"
     }
 
     fun toggleScanning() {

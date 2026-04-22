@@ -99,6 +99,7 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
     }
 
     var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
+    var testAnchors by remember { mutableStateOf<List<Anchor>>(emptyList()) }
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
     val earthRef = remember { mutableStateOf<Earth?>(null) }
 
@@ -109,6 +110,20 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
     
     DisposableEffect(scanner) {
         onDispose { scanner.close() }
+    }
+
+    // --- TEST ANCHOR LOGIC ---
+    // Runs whenever the list grows; creates only the newest anchor and appends it.
+    // Existing anchors are left untouched so they don't jump when VPS refines.
+    LaunchedEffect(viewModel.placedAnchors.size) {
+        if (viewModel.placedAnchors.isEmpty()) return@LaunchedEffect
+        val currentEarth = earthRef.value ?: return@LaunchedEffect
+        val latest = viewModel.placedAnchors.last()
+        val newAnchor = currentEarth.createAnchor(
+            latest.lat, latest.lon, latest.alt,
+            0f, 0f, 0f, 1f
+        )
+        testAnchors = testAnchors + newAnchor
     }
 
     // --- ANCHOR LOGIC ---
@@ -124,11 +139,15 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
         val currentEarth = earthRef.value
         val dest = viewModel.selectedDestination
         if (currentEarth != null && viewModel.earthTrackingState == TrackingState.TRACKING && dest != null) {
+            // Use the live camera altitude minus a typical eye-height so the anchor
+            // sits on the actual floor regardless of what altitude is stored in the DB.
+            // Falls back to dest.alt if we somehow don't have a geospatial pose yet.
+            val floorAlt = (viewModel.geospatialPose?.altitude ?: (dest.alt + viewModel.altOffset)) - 1.7
             roomAnchor?.detach()
             roomAnchor = currentEarth.createAnchor(
                 dest.lat + viewModel.latOffset,
                 dest.lon + viewModel.lonOffset,
-                dest.alt + viewModel.altOffset,
+                floorAlt,
                 0f, 0f, 0f, 1f
             )
         }
@@ -147,6 +166,7 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
                     sessionConfiguration = { session, config ->
                         config.geospatialMode = Config.GeospatialMode.ENABLED
                         config.focusMode = Config.FocusMode.AUTO
+                        config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                     },
                     onSessionUpdated = { session, frame ->
                         val earth = session.earth
@@ -197,14 +217,33 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
                         }
                     }
                 ) {
+                    // Material instances created inside the ARScene composable block so
+                    // Filament's rendering context is fully initialised before use.
+                    val roomMaterial = remember(materialLoader) {
+                        materialLoader.createColorInstance(color = SceneViewColor(1.0f, 0.0f, 0.0f, 1.0f))
+                    }
+                    val testMaterial = remember(materialLoader) {
+                        materialLoader.createColorInstance(color = SceneViewColor(0.0f, 1.0f, 0.0f, 1.0f))
+                    }
+
                     roomAnchor?.let { anchor ->
                         AnchorNode(anchor = anchor) {
+                            // 1 m wide × 5 m tall pillar sitting on the floor anchor.
+                            // Tall enough to be visible from across a corridor.
                             CubeNode(
-                                size = Float3(20.0f, 100.0f, 20.0f), // 20m wide/deep, 100m tall
-                                center = Position(0f, 50.0f, 0f), // Half of height so it starts at the anchor
-                                materialInstance = remember(materialLoader) {
-                                    materialLoader.createColorInstance(color = SceneViewColor(1.0f, 0.0f, 0.0f, 1.0f))
-                                }
+                                size = Float3(1.0f, 5.0f, 1.0f),
+                                center = Position(0f, 2.5f, 0f),
+                                materialInstance = roomMaterial
+                            )
+                        }
+                    }
+                    testAnchors.forEach { anchor ->
+                        AnchorNode(anchor = anchor) {
+                            // 1 m cube sitting on the floor — large enough to spot easily.
+                            CubeNode(
+                                size = Float3(1.0f, 1.0f, 1.0f),
+                                center = Position(0f, 0.5f, 0f),
+                                materialInstance = testMaterial
                             )
                         }
                     }

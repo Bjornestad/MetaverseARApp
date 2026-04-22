@@ -31,6 +31,15 @@ fun ARUiOverlay(viewModel: ARViewModel) {
             ) {
                 Text(if (viewModel.isScanning) "Cancel Scan" else "Scan QR to Improve Accuracy")
             }
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            Button(
+                onClick = { viewModel.placeTestAnchor() },
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+            ) {
+                Text("Place Test Object Here")
+            }
         }
 
         Column(
