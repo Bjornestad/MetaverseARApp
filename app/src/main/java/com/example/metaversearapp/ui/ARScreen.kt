@@ -167,6 +167,9 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
                         config.geospatialMode = Config.GeospatialMode.ENABLED
                         config.focusMode = Config.FocusMode.AUTO
                         config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                        // HDR light estimation feeds real-world lighting into Filament so
+                        // PBR materials show their actual colour instead of rendering black.
+                        config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                     },
                     onSessionUpdated = { session, frame ->
                         val earth = session.earth
@@ -217,33 +220,49 @@ fun ARScreen(db: AppDatabase, viewModel: ARViewModel = viewModel(factory = ARVie
                         }
                     }
                 ) {
-                    // Material instances created inside the ARScene composable block so
-                    // Filament's rendering context is fully initialised before use.
-                    val roomMaterial = remember(materialLoader) {
-                        materialLoader.createColorInstance(color = SceneViewColor(1.0f, 0.0f, 0.0f, 1.0f))
-                    }
-                    val testMaterial = remember(materialLoader) {
-                        materialLoader.createColorInstance(color = SceneViewColor(0.0f, 1.0f, 0.0f, 1.0f))
+                    // Fully matte yellow — roughness=1 / metallic=0 so it shows colour
+                    // under ambient light rather than trying to reflect an environment.
+                    val yellowMaterial = remember(materialLoader) {
+                        materialLoader.createColorInstance(
+                            color = SceneViewColor(1.0f, 0.9f, 0.0f, 1.0f),
+                            metallic = 0.0f,
+                            roughness = 1.0f,
+                            reflectance = 0.5f
+                        )
                     }
 
+                    // Destination marker — large "!" visible across a corridor (~5 m tall).
+                    //   Bar:  0.5 × 3.5 × 0.5 m, from 1.0 m to 4.5 m above the anchor.
+                    //   Dot:  0.5 × 0.5 × 0.5 m, from 0.0 m to 0.5 m above the anchor.
                     roomAnchor?.let { anchor ->
                         AnchorNode(anchor = anchor) {
-                            // 1 m wide × 5 m tall pillar sitting on the floor anchor.
-                            // Tall enough to be visible from across a corridor.
                             CubeNode(
-                                size = Float3(1.0f, 5.0f, 1.0f),
-                                center = Position(0f, 2.5f, 0f),
-                                materialInstance = roomMaterial
+                                size = Float3(0.5f, 3.5f, 0.5f),
+                                center = Position(0f, 2.75f, 0f),
+                                materialInstance = yellowMaterial
+                            )
+                            CubeNode(
+                                size = Float3(0.5f, 0.5f, 0.5f),
+                                center = Position(0f, 0.25f, 0f),
+                                materialInstance = yellowMaterial
                             )
                         }
                     }
+
+                    // Test markers — smaller "!" (~1.8 m tall) placed at user's feet.
+                    //   Bar:  0.3 × 1.2 × 0.3 m, from 0.55 m to 1.75 m.
+                    //   Dot:  0.3 × 0.3 × 0.3 m, from 0.0 m to 0.3 m.
                     testAnchors.forEach { anchor ->
                         AnchorNode(anchor = anchor) {
-                            // 1 m cube sitting on the floor — large enough to spot easily.
                             CubeNode(
-                                size = Float3(1.0f, 1.0f, 1.0f),
-                                center = Position(0f, 0.5f, 0f),
-                                materialInstance = testMaterial
+                                size = Float3(0.3f, 1.2f, 0.3f),
+                                center = Position(0f, 1.15f, 0f),
+                                materialInstance = yellowMaterial
+                            )
+                            CubeNode(
+                                size = Float3(0.3f, 0.3f, 0.3f),
+                                center = Position(0f, 0.15f, 0f),
+                                materialInstance = yellowMaterial
                             )
                         }
                     }
