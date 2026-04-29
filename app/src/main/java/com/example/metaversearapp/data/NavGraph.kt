@@ -39,6 +39,35 @@ object NavGraphPathfinder {
     fun nearestNode(nodes: List<NavNode>, lat: Double, lon: Double): NavNode? =
         nodes.minByOrNull { haversine(lat, lon, it.lat, it.lon) }
 
+    /**
+     * Compass bearing in degrees (0 = north, 90 = east, clockwise) from point 1 to point 2.
+     */
+    fun bearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val dLon  = Math.toRadians(lon2 - lon1)
+        val lat1R = Math.toRadians(lat1)
+        val lat2R = Math.toRadians(lat2)
+        val y = sin(dLon) * cos(lat2R)
+        val x = cos(lat1R) * sin(lat2R) - sin(lat1R) * cos(lat2R) * cos(dLon)
+        return (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
+    }
+
+    /**
+     * Converts a compass [bearingDeg] (0 = north, clockwise) into the
+     * (qx, qy, qz, qw) quaternion expected by [Earth.createAnchor].
+     *
+     * In ARCore's East-Up-South frame the anchor's +Z axis points South by
+     * default.  We rotate around Y so that +Z ends up facing [bearingDeg].
+     */
+    fun bearingToQuaternion(bearingDeg: Double): FloatArray {
+        val theta = Math.toRadians(180.0 - bearingDeg)   // rotation from South to bearing
+        return floatArrayOf(
+            0f,
+            sin(theta / 2).toFloat(),
+            0f,
+            cos(theta / 2).toFloat()
+        )
+    }
+
     // ── A* ────────────────────────────────────────────────────────────────────
 
     /**

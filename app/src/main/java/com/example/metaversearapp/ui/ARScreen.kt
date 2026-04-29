@@ -157,17 +157,29 @@ fun ARScreen(
         endPinAnchor = earth.createAnchor(pin.rawLat, pin.rawLon, pin.alt, 0f, 0f, 0f, 1f)
     }
 
-    // Create anchors for every waypoint in the A* path
+    // Create one directional arrow anchor per path segment (midpoint, bearing-rotated, VPS-offset)
     LaunchedEffect(viewModel.testPathNodes, earthRef.value, viewModel.earthTrackingState) {
         testCrumbAnchors.forEach { it.detach() }
         testCrumbAnchors = emptyList()
         val earth = earthRef.value ?: return@LaunchedEffect
         if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
         val path = viewModel.testPathNodes
-        if (path.isEmpty()) return@LaunchedEffect
-        val alt = viewModel.geospatialPose?.altitude?.minus(1.2) ?: return@LaunchedEffect
-        testCrumbAnchors = path.map { node ->
-            earth.createAnchor(node.lat, node.lon, alt, 0f, 0f, 0f, 1f)
+        if (path.size < 2) return@LaunchedEffect
+        val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
+
+        testCrumbAnchors = path.zipWithNext().mapNotNull { (a, b) ->
+            val midLat  = (a.lat + b.lat) / 2.0
+            val midLon  = (a.lon + b.lon) / 2.0
+            val bearing = NavGraphPathfinder.bearing(a.lat, a.lon, b.lat, b.lon)
+            val q       = NavGraphPathfinder.bearingToQuaternion(bearing)
+            try {
+                earth.createAnchor(
+                    midLat + viewModel.latOffset,
+                    midLon + viewModel.lonOffset,
+                    floorAlt,
+                    q[0], q[1], q[2], q[3]
+                )
+            } catch (_: Exception) { null }
         }
     }
 
@@ -363,12 +375,22 @@ fun ARScreen(
                         }
                     }
 
-                    // ── A* path waypoints (cyan cubes) ────────────────────────
+                    // ── A* path arrows (cyan, one per segment, directional) ───
+                    // Each anchor sits at the segment midpoint and is pre-rotated
+                    // so its local +Z axis faces toward the next node.
+                    // Body (shaft) extends along +Z; head widens at the +Z tip.
                     testCrumbAnchors.forEach { anchor ->
                         AnchorNode(anchor = anchor) {
+                            // Shaft — elongated along forward (+Z) direction
                             CubeNode(
-                                size = Float3(0.10f, 0.10f, 0.10f),
-                                center = Position(0f, 1.2f, 0f),
+                                size   = Float3(0.08f, 0.05f, 0.40f),
+                                center = Position(0f, 0.025f, 0f),
+                                materialInstance = cyanWaypointMaterial
+                            )
+                            // Arrowhead — wider, placed at the +Z tip of the shaft
+                            CubeNode(
+                                size   = Float3(0.24f, 0.05f, 0.15f),
+                                center = Position(0f, 0.025f, 0.275f),
                                 materialInstance = cyanWaypointMaterial
                             )
                         }
