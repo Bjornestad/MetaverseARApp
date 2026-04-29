@@ -43,7 +43,7 @@ data class QrProperties(
 
 @Serializable
 data class QrAnchor(
-    val coordinates: List<Double>, // [longitude, latitude]
+    val coordinates: List<Double>, // [longitude, latitude, altitude?]
     val type: String = "Point"
 )
 
@@ -56,9 +56,10 @@ fun QrFeature.toEntity(): QrLocation {
         name = properties.name,
         building = properties.building,
         floor = properties.floor,
-        // JSON coordinates are [longitude, latitude]
+        // JSON coordinates are [longitude, latitude, altitude?]
         lon = properties.anchor.coordinates.getOrNull(0) ?: 0.0,
         lat = properties.anchor.coordinates.getOrNull(1) ?: 0.0,
-        alt = 0.0
+        // Check if a 3rd coordinate exists for altitude
+        alt = properties.anchor.coordinates.getOrNull(2) ?: 0.0
     )
 }

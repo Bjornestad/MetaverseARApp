@@ -491,10 +491,15 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                                                     scope.launch {
                                                         val loc = db.qrDao().getById(qrId)
                                                         if (loc != null) {
-                                                            // Recalibrate offset
+                                                            // Recalibrate horizontal offset
                                                             latOffset = pose.latitude  - loc.lat
                                                             lonOffset = pose.longitude - loc.lon
-                                                            altOffset = pose.altitude  - loc.alt
+                                                            
+                                                            // ONLY calibrate altitude if the QR has a valid altitude
+                                                            if (loc.alt != 0.0) {
+                                                                altOffset = pose.altitude - loc.alt
+                                                            }
+                                                            
                                                             isCalibrated = true
                                                             isScanning   = false
 
@@ -505,7 +510,8 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                                                                     label      = loc.name,
                                                                     lat        = loc.lat,
                                                                     lon        = loc.lon,
-                                                                    alt        = loc.alt
+                                                                    // Only overwrite node altitude if QR has it
+                                                                    alt        = if (loc.alt != 0.0) loc.alt else node.alt
                                                                 )
                                                                 db.navDao().updateNode(anchored)
                                                                 lastRecordedNode = anchored
