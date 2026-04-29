@@ -43,6 +43,7 @@ import io.github.sceneview.rememberModelLoader
 import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -94,6 +95,7 @@ fun ARScreen(
 
     // --- SAFETY & LIFECYCLE STATE ---
     var canRenderAR by remember { mutableStateOf(false) }
+    var showDebug by remember { mutableStateOf(false) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -230,7 +232,10 @@ fun ARScreen(
                     sessionConfiguration = { session, config ->
                         config.geospatialMode = Config.GeospatialMode.ENABLED
                         config.focusMode = Config.FocusMode.AUTO
-                        config.planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                        config.planeFindingMode = if (showDebug)
+                            Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
+                        else
+                            Config.PlaneFindingMode.DISABLED
                         config.lightEstimationMode = Config.LightEstimationMode.ENVIRONMENTAL_HDR
                     },
                     onSessionUpdated = { session, frame ->
@@ -424,21 +429,36 @@ fun ARScreen(
             }
 
             // --- LAYER 2: UI OVERLAYS ---
-            ARUiOverlay(viewModel)
+            ARUiOverlay(viewModel, showDebug = showDebug)
 
-            // Admin button overlay
-            IconButton(
-                onClick  = onAdminRequest,
+            // Admin + debug toggle buttons
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(top = 16.dp, end = 8.dp)
+                    .padding(top = 16.dp, end = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Icon(
-                    Icons.Default.AdminPanelSettings,
-                    contentDescription = "Admin",
-                    tint = ComposeColor.White.copy(alpha = 0.7f),
-                    modifier = Modifier.size(28.dp)
-                )
+                // Debug toggle
+                IconButton(onClick = { showDebug = !showDebug }) {
+                    Icon(
+                        Icons.Default.BugReport,
+                        contentDescription = "Toggle Debug",
+                        tint = if (showDebug)
+                            ComposeColor(0xFFFFD700)   // gold when active
+                        else
+                            ComposeColor.White.copy(alpha = 0.5f),
+                        modifier = Modifier.size(26.dp)
+                    )
+                }
+                // Admin
+                IconButton(onClick = onAdminRequest) {
+                    Icon(
+                        Icons.Default.AdminPanelSettings,
+                        contentDescription = "Admin",
+                        tint = ComposeColor.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(28.dp)
+                    )
+                }
             }
 
             // Path info overlay (destination selector flow)

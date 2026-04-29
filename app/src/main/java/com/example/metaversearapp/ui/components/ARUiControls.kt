@@ -18,7 +18,7 @@ import com.example.metaversearapp.ui.ARViewModel
 import kotlin.math.*
 
 @Composable
-fun ARUiOverlay(viewModel: ARViewModel) {
+fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -63,8 +63,8 @@ fun ARUiOverlay(viewModel: ARViewModel) {
                 Text(buttonLabel)
             }
 
-            // Path arrows — visible once A* has produced a result
-            if (viewModel.testPathNodes.size >= 2) {
+            // Path arrows — visible once A* has produced a result, only in debug mode
+            if (showDebug && viewModel.testPathNodes.size >= 2) {
                 Spacer(modifier = Modifier.height(4.dp))
                 PathArrowsOverlay(pathNodes = viewModel.testPathNodes)
             }
@@ -83,7 +83,10 @@ fun ARUiOverlay(viewModel: ARViewModel) {
                 )
             }
 
-            GeospatialBottomOverlay(viewModel = viewModel)
+            // VPS debug card — only shown when debug mode is on
+            if (showDebug) {
+                GeospatialBottomOverlay(viewModel = viewModel)
+            }
         }
     }
 }
