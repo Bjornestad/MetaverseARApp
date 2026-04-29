@@ -34,4 +34,8 @@ interface NavDao {
 
     @Query("SELECT COUNT(*) FROM nav_edges")
     suspend fun edgeCount(): Int
+
+    /** Returns all nodes whose [NodeType] matches [type] (stored as its name string). */
+    @Query("SELECT * FROM nav_nodes WHERE type = :type")
+    suspend fun getNodesByType(type: String): List<NavNode>
 }

@@ -26,7 +26,11 @@ android {
         
         // Use the key from local.properties, or empty string if not found
         manifestPlaceholders["arcoreApiKey"] = localProperties.getProperty("ARCORE_API_KEY") ?: ""
-        
+
+        // GitHub Gist secrets — defined in local.properties, never committed to VCS
+        buildConfigField("String", "GITHUB_TOKEN",       "\"${localProperties.getProperty("GITHUB_TOKEN")       ?: ""}\"")
+        buildConfigField("String", "NAV_GRAPH_GIST_ID",  "\"${localProperties.getProperty("NAV_GRAPH_GIST_ID")  ?: ""}\"")
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -45,6 +49,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true   // required to expose BuildConfig fields to Kotlin sources
     }
 }
 

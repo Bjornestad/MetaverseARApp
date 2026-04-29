@@ -11,7 +11,7 @@ object NavGraphPathfinder {
 
     // ── Geometry ──────────────────────────────────────────────────────────────
 
-    /** Haversine great-circle distance in metres between two lat/lon points. */
+    /** Haversine great-circle distance in metres between two lat/lon points (2D). */
     fun haversine(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
         val R = 6_371_000.0
         val dLat = Math.toRadians(lat2 - lat1)
@@ -19,6 +19,20 @@ object NavGraphPathfinder {
         val a = sin(dLat / 2).pow(2) +
                 cos(Math.toRadians(lat1)) * cos(Math.toRadians(lat2)) * sin(dLon / 2).pow(2)
         return R * 2.0 * atan2(sqrt(a), sqrt(1.0 - a))
+    }
+
+    /**
+     * 3-D straight-line distance in metres, combining horizontal Haversine
+     * with the vertical altitude difference.  Used for edge weights on stair /
+     * multi-floor segments so A* correctly accounts for the cost of climbing.
+     */
+    fun distance3d(
+        lat1: Double, lon1: Double, alt1: Double,
+        lat2: Double, lon2: Double, alt2: Double
+    ): Double {
+        val horiz = haversine(lat1, lon1, lat2, lon2)
+        val vert  = abs(alt2 - alt1)
+        return sqrt(horiz * horiz + vert * vert)
     }
 
     /** Returns the node closest to the given lat/lon, or null if the list is empty. */
@@ -31,6 +45,8 @@ object NavGraphPathfinder {
      * Finds the shortest path between [startId] and [goalId] using A*.
      *
      * Edges are treated as **undirected** (both directions are explored).
+     * The heuristic uses 3-D straight-line distance so altitude differences
+     * (e.g. navigating to a different floor via stairs) are properly estimated.
      *
      * @return Ordered list of [NavNode]s from start to goal, or empty if no path exists.
      */
@@ -43,7 +59,7 @@ object NavGraphPathfinder {
         if (startId == goalId) return listOfNotNull(nodes.find { it.id == startId })
 
         val nodeMap = nodes.associateBy { it.id }
-        val goal   = nodeMap[goalId] ?: return emptyList()
+        val goal    = nodeMap[goalId] ?: return emptyList()
 
         // Build undirected adjacency list: nodeId -> [(neighborId, weight)]
         val adj = HashMap<String, MutableList<Pair<String, Double>>>(nodes.size * 2)
@@ -84,8 +100,13 @@ object NavGraphPathfinder {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    /**
+     * Admissible heuristic: 3-D straight-line distance to the goal.
+     * Including altitude ensures the heuristic never over-estimates on
+     * multi-floor paths, keeping A* optimal.
+     */
     private fun h(node: NavNode, goal: NavNode) =
-        haversine(node.lat, node.lon, goal.lat, goal.lon)
+        distance3d(node.lat, node.lon, node.alt, goal.lat, goal.lon, goal.alt)
 
     private fun reconstruct(
         cameFrom: Map<String, String>,

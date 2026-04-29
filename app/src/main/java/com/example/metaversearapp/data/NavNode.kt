@@ -2,7 +2,27 @@ package com.example.metaversearapp.data
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.TypeConverter
 import kotlinx.serialization.Serializable
+
+/** Semantic type of a nav node, used for routing hints and AR visuals. */
+@Serializable
+enum class NodeType {
+    WAYPOINT,     // ordinary path node
+    DOOR,         // doorway / entrance
+    STAIR_TOP,    // top landing of a staircase
+    STAIR_BOTTOM  // bottom landing of a staircase
+}
+
+/** Room TypeConverter so NodeType is stored as its name string. */
+class NodeTypeConverter {
+    @TypeConverter
+    fun fromNodeType(type: NodeType): String = type.name
+
+    @TypeConverter
+    fun toNodeType(value: String): NodeType =
+        NodeType.entries.firstOrNull { it.name == value } ?: NodeType.WAYPOINT
+}
 
 /**
  * A waypoint node in the navigation graph.
@@ -19,5 +39,6 @@ data class NavNode(
     val alt: Double = 0.0,
     val floor: String = "1",
     val anchorQrId: String? = null,
-    val label: String = ""
+    val label: String = "",
+    val type: NodeType = NodeType.WAYPOINT
 )

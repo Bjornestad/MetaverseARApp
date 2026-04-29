@@ -28,11 +28,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.foundation.layout.PaddingValues
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.NavEdge
+import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphExport
 import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
+import com.example.metaversearapp.data.NodeType
 import com.google.ar.core.Config
 import com.google.ar.core.Earth
 import com.google.ar.core.GeospatialPose
@@ -45,19 +48,22 @@ import io.github.sceneview.ar.ARScene
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.rememberMaterialLoader
 import io.github.sceneview.rememberModelLoader
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.util.Locale
 import java.util.UUID
 
 // ── Constants ──────────────────────────────────────────────────────────────────
-private const val ADMIN_PIN            = "1234"          // change in production
-private const val MIN_NODE_DISTANCE_M  = 1.5             // metres between auto-captured nodes
-private const val CAPTURE_INTERVAL_MS  = 2_000L          // max capture rate
+private const val ADMIN_PIN               = "1234"   // change in production
+private const val MIN_NODE_DISTANCE_M     = 1.5      // metres between auto-captured nodes
+private const val CAPTURE_INTERVAL_MS     = 2_000L   // max capture rate
+private const val STAIR_CONNECT_RADIUS_M  = 20.0     // max horizontal metres to auto-link stair endpoints
 
-private val FLOOR_OPTIONS = listOf("BK", "1", "2", "3", "4", "5")
+private val FLOOR_OPTIONS = listOf("-2","-1","0", "1", "2", "3", "4", "5")
 
 // ── Top-level screen ───────────────────────────────────────────────────────────
 @Composable
@@ -174,11 +180,50 @@ private fun AdminHubScreen(
     var edgeCount    by remember { mutableIntStateOf(0) }
     var showClearDlg by remember { mutableStateOf(false) }
     var exportStatus by remember { mutableStateOf("") }
+    var uploadStatus by remember { mutableStateOf("") }
+    var isUploading  by remember { mutableStateOf(false) }
 
-    // Load stats on entry
+    // Gist sync state shown while the hub loads
+    var isSyncing   by remember { mutableStateOf(true) }
+    var syncMessage by remember { mutableStateOf("Syncing latest graph from Gist…") }
+
+    // On entry: pull the latest graph from the Gist first so any new
+    // recording is always layered on top of the full existing dataset.
     LaunchedEffect(Unit) {
-        nodeCount = db.navDao().nodeCount()
-        edgeCount = db.navDao().edgeCount()
+        val result = NavGistSync.download()
+        result.onSuccess { export ->
+            withContext(Dispatchers.IO) {
+                db.navDao().clearEdges()
+                db.navDao().clearNodes()
+                export.nodes.forEach { db.navDao().insertNode(it) }
+                export.edges.forEach { db.navDao().insertEdge(it) }
+            }
+        }
+        // Refresh counts from DB regardless of whether sync succeeded
+        nodeCount   = db.navDao().nodeCount()
+        edgeCount   = db.navDao().edgeCount()
+        syncMessage = result.fold(
+            onSuccess = { "Graph up to date (${nodeCount} nodes, ${edgeCount} edges)" },
+            onFailure = { "Could not sync from Gist — recording on local data only" }
+        )
+        isSyncing = false
+    }
+
+    // Show a full-screen spinner until the sync resolves
+    if (isSyncing) {
+        Box(
+            modifier         = Modifier.fillMaxSize().background(Color(0xFF121212)),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                CircularProgressIndicator(color = Color(0xFF64FFDA))
+                Text(syncMessage, color = Color.Gray, fontSize = 13.sp)
+            }
+        }
+        return
     }
 
     Box(
@@ -241,7 +286,49 @@ private fun AdminHubScreen(
                 Text("Start Recording Walk", color = Color.Black, fontWeight = FontWeight.Bold, fontSize = 16.sp)
             }
 
-            // Export
+            // Upload to GitHub Gist
+            Button(
+                onClick = {
+                    scope.launch {
+                        isUploading  = true
+                        uploadStatus = "Uploading…"
+                        val nodes  = db.navDao().getAllNodes()
+                        val edges  = db.navDao().getAllEdges()
+                        val result = NavGistSync.upload(nodes, edges)
+                        isUploading  = false
+                        uploadStatus = result.fold(
+                            onSuccess = { "✓ Uploaded ${nodes.size} nodes, ${edges.size} edges to Gist" },
+                            onFailure = { "✗ Upload failed: ${it.message}" }
+                        )
+                    }
+                },
+                enabled  = !isUploading,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape    = RoundedCornerShape(12.dp),
+                colors   = ButtonDefaults.buttonColors(containerColor = Color(0xFF1565C0))
+            ) {
+                if (isUploading) {
+                    CircularProgressIndicator(
+                        color    = Color.White,
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Default.CloudUpload, contentDescription = null)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (isUploading) "Uploading…" else "Upload Graph to Gist", fontWeight = FontWeight.Bold)
+            }
+
+            if (uploadStatus.isNotEmpty()) {
+                Text(
+                    uploadStatus,
+                    color    = if (uploadStatus.startsWith("✓")) Color(0xFF64FFDA) else Color(0xFFFF6B6B),
+                    fontSize = 12.sp
+                )
+            }
+
+            // Share as text (fallback / manual backup)
             OutlinedButton(
                 onClick = {
                     scope.launch {
@@ -265,7 +352,7 @@ private fun AdminHubScreen(
             ) {
                 Icon(Icons.Default.Share, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Export Graph JSON")
+                Text("Share Graph JSON")
             }
 
             if (exportStatus.isNotEmpty()) {
@@ -295,12 +382,11 @@ private fun AdminHubScreen(
                     Text("How to map a building", color = Color(0xFF64FFDA), fontWeight = FontWeight.SemiBold)
                     Spacer(modifier = Modifier.height(8.dp))
                     InstructionStep("1", "Tap 'Start Recording Walk'")
-                    InstructionStep("2", "Scan a QR code to calibrate GPS")
-                    InstructionStep("3", "Walk corridors at normal speed")
-                    InstructionStep("4", "Scan QRs you pass — they anchor the path")
-                    InstructionStep("5", "Change floor label when using stairs/elevator")
-                    InstructionStep("6", "Tap 'Finish Session' when done")
-                    InstructionStep("7", "Export and upload the JSON to the Gist/backend")
+                    InstructionStep("2", "Walk corridors at normal speed")
+                    InstructionStep("3", "Optionally scan QRs you pass — they anchor and recalibrate the path")
+                    InstructionStep("4", "Change floor label when using stairs/elevator")
+                    InstructionStep("5", "Tap 'Finish Session' when done")
+                    InstructionStep("6", "Tap 'Upload Graph to Gist' — all users get the update on next app launch")
                 }
             }
         }
@@ -372,7 +458,7 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
     var latOffset  by remember { mutableStateOf(0.0) }
     var lonOffset  by remember { mutableStateOf(0.0) }
     var altOffset  by remember { mutableStateOf(0.0) }
-    var isCalibrated by remember { mutableStateOf(false) }
+    var isCalibrated by remember { mutableStateOf(true) }
 
     // Recording state
     var isRecording          by remember { mutableStateOf(false) }
@@ -381,7 +467,55 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
     var sessionEdges         by remember { mutableIntStateOf(0) }
     var lastRecordedNode     by remember { mutableStateOf<NavNode?>(null) }
     var lastCaptureTime      by remember { mutableLongStateOf(0L) }
-    var statusMsg            by remember { mutableStateOf("Scan a QR code to calibrate GPS first") }
+    var statusMsg            by remember { mutableStateOf("Ready — tap Start Recording, or scan a QR to improve accuracy") }
+    var lastNodeType         by remember { mutableStateOf(NodeType.WAYPOINT) }
+
+    /**
+     * Updates the last recorded node's type in the DB.
+     * For STAIR_TOP / STAIR_BOTTOM: also scans for the complementary stair
+     * node type within [STAIR_CONNECT_RADIUS_M] on a different floor and
+     * creates a bridging edge so A* can route between floors even when the
+     * two stair ends were recorded in separate walks.
+     */
+    fun markLastNodeAs(type: NodeType) {
+        val node = lastRecordedNode ?: run {
+            statusMsg = "No waypoint recorded yet — start recording first"
+            return
+        }
+        scope.launch {
+            val updated = node.copy(type = type)
+            db.navDao().updateNode(updated)
+            lastRecordedNode = updated
+            lastNodeType     = type
+            statusMsg = "Marked as ${type.name.replace('_', ' ').lowercase()
+                .replaceFirstChar { it.uppercase() }}"
+
+            // Auto-connect stair endpoints recorded in separate walks
+            if (type == NodeType.STAIR_TOP || type == NodeType.STAIR_BOTTOM) {
+                val complementType = if (type == NodeType.STAIR_TOP)
+                    NodeType.STAIR_BOTTOM else NodeType.STAIR_TOP
+                val candidates = db.navDao().getNodesByType(complementType.name)
+                var connected = 0
+                for (candidate in candidates) {
+                    val horizDist = NavGraphPathfinder.haversine(
+                        node.lat, node.lon, candidate.lat, candidate.lon
+                    )
+                    if (horizDist <= STAIR_CONNECT_RADIUS_M && candidate.floor != node.floor) {
+                        val weight = NavGraphPathfinder.distance3d(
+                            node.lat, node.lon, node.alt,
+                            candidate.lat, candidate.lon, candidate.alt
+                        )
+                        db.navDao().insertEdge(NavEdge(node.id, candidate.id, weight))
+                        sessionEdges++
+                        connected++
+                    }
+                }
+                if (connected > 0) {
+                    statusMsg = "Marked + auto-connected to $connected stair node(s) on other floor(s)"
+                }
+            }
+        }
+    }
 
     // QR scanning
     var isScanning           by remember { mutableStateOf(false) }
@@ -447,9 +581,9 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                                                 NavEdge(
                                                     fromId = prevNode.id,
                                                     toId   = newNode.id,
-                                                    weight = NavGraphPathfinder.haversine(
-                                                        prevNode.lat, prevNode.lon,
-                                                        newNode.lat,  newNode.lon
+                                                    weight = NavGraphPathfinder.distance3d(
+                                                        prevNode.lat, prevNode.lon, prevNode.alt,
+                                                        newNode.lat,  newNode.lon,  newNode.alt
                                                     )
                                                 )
                                             )
@@ -637,10 +771,14 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                 }
             }
 
-            // Bottom: controls
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Bottom: controls — scrollable so the floor selector stays reachable
+            // even when the marker card pushes it below the fold on smaller screens
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
 
-                // Floor selector
+                // Floor selector — kept first so it's always visible without scrolling
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
                     shape  = RoundedCornerShape(12.dp),
@@ -659,6 +797,86 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                                         selectedLabelColor     = Color.Black
                                     )
                                 )
+                            }
+                        }
+                    }
+                }
+
+                // Mark last waypoint
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
+                    shape  = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(10.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("Mark last waypoint", color = Color.Gray, fontSize = 11.sp)
+                            if (lastRecordedNode != null) {
+                                val (typeLabel, typeColor) = when (lastNodeType) {
+                                    NodeType.DOOR         -> "DOOR"         to Color(0xFFFFA726)
+                                    NodeType.STAIR_TOP    -> "STAIR TOP"    to Color(0xFF66BB6A)
+                                    NodeType.STAIR_BOTTOM -> "STAIR BOTTOM" to Color(0xFFEF5350)
+                                    NodeType.WAYPOINT     -> "WAYPOINT"     to Color.Gray
+                                }
+                                Text(
+                                    typeLabel,
+                                    color      = typeColor,
+                                    fontSize   = 11.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            OutlinedButton(
+                                onClick  = { markLastNodeAs(NodeType.DOOR) },
+                                enabled  = lastRecordedNode != null,
+                                modifier = Modifier.weight(1f),
+                                shape    = RoundedCornerShape(8.dp),
+                                colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFFA726)),
+                                border   = androidx.compose.foundation.BorderStroke(1.dp,
+                                    if (lastNodeType == NodeType.DOOR) Color(0xFFFFA726) else Color(0xFFFFA726).copy(alpha = 0.4f)),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                            ) {
+                                Icon(Icons.Default.DoorFront, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Door", fontSize = 11.sp)
+                            }
+                            OutlinedButton(
+                                onClick  = { markLastNodeAs(NodeType.STAIR_TOP) },
+                                enabled  = lastRecordedNode != null,
+                                modifier = Modifier.weight(1f),
+                                shape    = RoundedCornerShape(8.dp),
+                                colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF66BB6A)),
+                                border   = androidx.compose.foundation.BorderStroke(1.dp,
+                                    if (lastNodeType == NodeType.STAIR_TOP) Color(0xFF66BB6A) else Color(0xFF66BB6A).copy(alpha = 0.4f)),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                            ) {
+                                Icon(Icons.Default.ArrowUpward, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Stair ↑", fontSize = 11.sp)
+                            }
+                            OutlinedButton(
+                                onClick  = { markLastNodeAs(NodeType.STAIR_BOTTOM) },
+                                enabled  = lastRecordedNode != null,
+                                modifier = Modifier.weight(1f),
+                                shape    = RoundedCornerShape(8.dp),
+                                colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFEF5350)),
+                                border   = androidx.compose.foundation.BorderStroke(1.dp,
+                                    if (lastNodeType == NodeType.STAIR_BOTTOM) Color(0xFFEF5350) else Color(0xFFEF5350).copy(alpha = 0.4f)),
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+                            ) {
+                                Icon(Icons.Default.ArrowDownward, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Stair ↓", fontSize = 11.sp)
                             }
                         }
                     }
@@ -687,16 +905,13 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                 // Start / Stop recording
                 Button(
                     onClick = {
-                        if (!isCalibrated) {
-                            statusMsg = "Scan a QR code first to calibrate!"
-                            return@Button
-                        }
                         isRecording = !isRecording
                         if (isRecording) {
-                            lastRecordedNode = null   // start fresh segment
+                            lastRecordedNode = null
+                            lastNodeType     = NodeType.WAYPOINT
                             statusMsg = "Recording — walk the corridor"
                         } else {
-                            statusMsg = "Paused — scan QR or start new segment"
+                            statusMsg = "Paused — mark waypoint type or start new segment"
                         }
                     },
                     modifier = Modifier.fillMaxWidth().height(52.dp),

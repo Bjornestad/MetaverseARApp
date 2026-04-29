@@ -56,8 +56,8 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun ARScreen(
-    db: AppDatabase, 
-    viewModel: ARViewModel = viewModel(factory = ARViewModel.Factory(db)), 
+    db: AppDatabase,
+    viewModel: ARViewModel = viewModel(factory = ARViewModel.Factory(db)),
     onAdminRequest: () -> Unit = {}
 ) {
     val scope = rememberCoroutineScope()
@@ -89,9 +89,7 @@ fun ARScreen(
     }
 
     LaunchedEffect(Unit) {
-        if (!permissionsGranted) {
-            launcher.launch(permissions)
-        }
+        if (!permissionsGranted) launcher.launch(permissions)
     }
 
     // --- SAFETY & LIFECYCLE STATE ---
@@ -101,14 +99,14 @@ fun ARScreen(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 scope.launch {
-                    delay(500) // Hardware warmup delay
+                    delay(500)
                     if (lifecycleOwner.lifecycle.currentState == Lifecycle.State.RESUMED) {
                         canRenderAR = true
                     }
                 }
             } else if (event == Lifecycle.Event.ON_PAUSE || event == Lifecycle.Event.ON_STOP) {
                 canRenderAR = false
-                viewModel.isScanning = false // Prevent background processing
+                viewModel.isScanning = false
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -119,11 +117,10 @@ fun ARScreen(
     }
 
     var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
-    var testAnchors by remember { mutableStateOf<List<Anchor>>(emptyList()) }
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
     val earthRef = remember { mutableStateOf<Earth?>(null) }
 
-    // --- PATH / BREADCRUMBS ---
+    // --- PATH / BREADCRUMBS (destination selector flow) ---
     var allNavNodes by remember { mutableStateOf<List<NavNode>>(emptyList()) }
     var allNavEdges by remember { mutableStateOf<List<com.example.metaversearapp.data.NavEdge>>(emptyList()) }
     var pathNodes   by remember { mutableStateOf<List<NavNode>>(emptyList()) }
@@ -135,28 +132,56 @@ fun ARScreen(
         allNavEdges = db.navDao().getAllEdges()
     }
 
+    // --- WAYPOINT PIN ANCHORS ---
+    var startPinAnchor   by remember { mutableStateOf<Anchor?>(null) }
+    var endPinAnchor     by remember { mutableStateOf<Anchor?>(null) }
+    var testCrumbAnchors by remember { mutableStateOf<List<Anchor>>(emptyList()) }
+
+    // Create / update start pin anchor whenever the pin or earth changes
+    LaunchedEffect(viewModel.startPin, earthRef.value, viewModel.earthTrackingState) {
+        startPinAnchor?.detach()
+        startPinAnchor = null
+        val earth = earthRef.value ?: return@LaunchedEffect
+        if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+        val pin = viewModel.startPin ?: return@LaunchedEffect
+        startPinAnchor = earth.createAnchor(pin.rawLat, pin.rawLon, pin.alt, 0f, 0f, 0f, 1f)
+    }
+
+    // Create / update end pin anchor
+    LaunchedEffect(viewModel.endPin, earthRef.value, viewModel.earthTrackingState) {
+        endPinAnchor?.detach()
+        endPinAnchor = null
+        val earth = earthRef.value ?: return@LaunchedEffect
+        if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+        val pin = viewModel.endPin ?: return@LaunchedEffect
+        endPinAnchor = earth.createAnchor(pin.rawLat, pin.rawLon, pin.alt, 0f, 0f, 0f, 1f)
+    }
+
+    // Create anchors for every waypoint in the A* path
+    LaunchedEffect(viewModel.testPathNodes, earthRef.value, viewModel.earthTrackingState) {
+        testCrumbAnchors.forEach { it.detach() }
+        testCrumbAnchors = emptyList()
+        val earth = earthRef.value ?: return@LaunchedEffect
+        if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+        val path = viewModel.testPathNodes
+        if (path.isEmpty()) return@LaunchedEffect
+        val alt = viewModel.geospatialPose?.altitude?.minus(1.2) ?: return@LaunchedEffect
+        testCrumbAnchors = path.map { node ->
+            earth.createAnchor(node.lat, node.lon, alt, 0f, 0f, 0f, 1f)
+        }
+    }
+
     val scanner = remember {
-        val options = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
+        val options = BarcodeScannerOptions.Builder()
+            .setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
         BarcodeScanning.getClient(options)
     }
-    
+
     DisposableEffect(scanner) {
         onDispose { scanner.close() }
     }
 
-    // --- TEST ANCHOR LOGIC ---
-    LaunchedEffect(viewModel.placedAnchors.size) {
-        if (viewModel.placedAnchors.isEmpty()) return@LaunchedEffect
-        val currentEarth = earthRef.value ?: return@LaunchedEffect
-        val latest = viewModel.placedAnchors.last()
-        val newAnchor = currentEarth.createAnchor(
-            latest.lat, latest.lon, latest.alt,
-            0f, 0f, 0f, 1f
-        )
-        testAnchors = testAnchors + newAnchor
-    }
-
-    // --- ANCHOR LOGIC ---
+    // --- DESTINATION ANCHOR LOGIC ---
     LaunchedEffect(
         viewModel.selectedDestination,
         viewModel.isCalibrated,
@@ -204,7 +229,7 @@ fun ARScreen(
                         if (earth != null && earth.trackingState == TrackingState.TRACKING) {
                             val pose = earth.cameraGeospatialPose
 
-                            // Tick off passed breadcrumbs
+                            // Tick off passed breadcrumbs (destination selector flow)
                             if (crumbAnchors.isNotEmpty() && pathNodes.size > 1) {
                                 val nextNode = pathNodes[1]
                                 val dist = NavGraphPathfinder.haversine(
@@ -212,7 +237,7 @@ fun ARScreen(
                                     pose.longitude - viewModel.lonOffset,
                                     nextNode.lat, nextNode.lon
                                 )
-                                if (dist < 3.0) { // within 3 metres → passed it
+                                if (dist < 3.0) {
                                     crumbAnchors.firstOrNull()?.detach()
                                     crumbAnchors = crumbAnchors.drop(1)
                                     pathNodes    = pathNodes.drop(1)
@@ -234,7 +259,7 @@ fun ARScreen(
                                                 (context.getSystemService(android.content.Context.WINDOW_SERVICE) as WindowManager).defaultDisplay.rotation
                                             }
 
-                                            val inputImage = InputImage.fromMediaImage(image, when(rotation) {
+                                            val inputImage = InputImage.fromMediaImage(image, when (rotation) {
                                                 Surface.ROTATION_90 -> 0; Surface.ROTATION_180 -> 270; Surface.ROTATION_270 -> 180; else -> 90
                                             })
 
@@ -245,7 +270,7 @@ fun ARScreen(
                                                         viewModel.onQrScanned(id, pose)
                                                     }
                                                 }
-                                                .addOnCompleteListener { 
+                                                .addOnCompleteListener {
                                                     try { image.close() } catch (_: Exception) {}
                                                 }
                                         } catch (e: Exception) {
@@ -260,15 +285,33 @@ fun ARScreen(
                         }
                     }
                 ) {
+                    // ── Materials ─────────────────────────────────────────────
                     val yellowMaterial = remember(materialLoader) {
                         materialLoader.createColorInstance(
                             color = SceneViewColor(1.0f, 0.9f, 0.0f, 1.0f),
-                            metallic = 0.0f,
-                            roughness = 1.0f,
-                            reflectance = 0.5f
+                            metallic = 0.0f, roughness = 1.0f, reflectance = 0.5f
+                        )
+                    }
+                    val greenPinMaterial = remember(materialLoader) {
+                        materialLoader.createColorInstance(
+                            color = SceneViewColor(0.15f, 0.85f, 0.25f, 1.0f),
+                            metallic = 0.0f, roughness = 0.7f, reflectance = 0.4f
+                        )
+                    }
+                    val redPinMaterial = remember(materialLoader) {
+                        materialLoader.createColorInstance(
+                            color = SceneViewColor(0.95f, 0.18f, 0.1f, 1.0f),
+                            metallic = 0.0f, roughness = 0.7f, reflectance = 0.4f
+                        )
+                    }
+                    val cyanWaypointMaterial = remember(materialLoader) {
+                        materialLoader.createColorInstance(
+                            color = SceneViewColor(0.0f, 0.9f, 0.85f, 0.95f),
+                            metallic = 0.0f, roughness = 0.6f, reflectance = 0.5f
                         )
                     }
 
+                    // ── Destination marker (yellow) ────────────────────────────
                     roomAnchor?.let { anchor ->
                         AnchorNode(anchor = anchor) {
                             CubeNode(
@@ -284,20 +327,54 @@ fun ARScreen(
                         }
                     }
 
-                    testAnchors.forEach { anchor ->
+                    // ── Start pin (green) ──────────────────────────────────────
+                    startPinAnchor?.let { anchor ->
                         AnchorNode(anchor = anchor) {
+                            // Stem
                             CubeNode(
-                                size = Float3(0.3f, 1.2f, 0.3f),
-                                center = Position(0f, 1.15f, 0f),
-                                materialInstance = yellowMaterial
+                                size = Float3(0.12f, 1.8f, 0.12f),
+                                center = Position(0f, 0.9f, 0f),
+                                materialInstance = greenPinMaterial
                             )
+                            // Head
                             CubeNode(
-                                size = Float3(0.3f, 0.3f, 0.3f),
-                                center = Position(0f, 0.15f, 0f),
-                                materialInstance = yellowMaterial
+                                size = Float3(0.32f, 0.32f, 0.32f),
+                                center = Position(0f, 1.96f, 0f),
+                                materialInstance = greenPinMaterial
                             )
                         }
                     }
+
+                    // ── End pin (red) ──────────────────────────────────────────
+                    endPinAnchor?.let { anchor ->
+                        AnchorNode(anchor = anchor) {
+                            // Stem
+                            CubeNode(
+                                size = Float3(0.12f, 1.8f, 0.12f),
+                                center = Position(0f, 0.9f, 0f),
+                                materialInstance = redPinMaterial
+                            )
+                            // Head
+                            CubeNode(
+                                size = Float3(0.32f, 0.32f, 0.32f),
+                                center = Position(0f, 1.96f, 0f),
+                                materialInstance = redPinMaterial
+                            )
+                        }
+                    }
+
+                    // ── A* path waypoints (cyan cubes) ────────────────────────
+                    testCrumbAnchors.forEach { anchor ->
+                        AnchorNode(anchor = anchor) {
+                            CubeNode(
+                                size = Float3(0.10f, 0.10f, 0.10f),
+                                center = Position(0f, 1.2f, 0f),
+                                materialInstance = cyanWaypointMaterial
+                            )
+                        }
+                    }
+
+                    // ── Destination breadcrumbs (green, destination selector flow) ──
                     crumbAnchors.forEachIndexed { index, anchor ->
                         AnchorNode(anchor = anchor) {
                             CubeNode(
@@ -314,7 +391,12 @@ fun ARScreen(
                     }
                 }
             } else {
-                Box(modifier = Modifier.fillMaxSize().background(ComposeColor.Black), contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(ComposeColor.Black),
+                    contentAlignment = Alignment.Center
+                ) {
                     CircularProgressIndicator(color = ComposeColor.Cyan)
                 }
             }
@@ -337,7 +419,7 @@ fun ARScreen(
                 )
             }
 
-            // Path info overlay
+            // Path info overlay (destination selector flow)
             if (pathNodes.isNotEmpty() && viewModel.isCalibrated) {
                 val remaining = pathNodes.size - 1
                 Box(modifier = Modifier.align(Alignment.TopCenter).padding(top = 80.dp)) {
