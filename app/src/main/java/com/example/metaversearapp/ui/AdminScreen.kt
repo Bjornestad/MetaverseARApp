@@ -59,6 +59,15 @@ import java.util.UUID
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 private const val ADMIN_PIN               = "1234"   // change in production
+
+/**
+ * Guards the Gist sync so it only runs once per process lifetime.
+ * Resets automatically on app restart (which is the desired behaviour —
+ * a fresh launch should always pull the latest graph).
+ * Prevents the race where returning from a recording session re-enters
+ * AdminHubScreen, fires LaunchedEffect(Unit) again, and wipes new nodes.
+ */
+private var adminGistSyncDone = false
 private const val MIN_NODE_DISTANCE_M     = 1.5      // metres between auto-captured nodes
 private const val CAPTURE_INTERVAL_MS     = 2_000L   // max capture rate
 private const val STAIR_CONNECT_RADIUS_M  = 20.0     // max horizontal metres to auto-link stair endpoints
@@ -183,29 +192,34 @@ private fun AdminHubScreen(
     var uploadStatus by remember { mutableStateOf("") }
     var isUploading  by remember { mutableStateOf(false) }
 
-    // Gist sync state shown while the hub loads
-    var isSyncing   by remember { mutableStateOf(true) }
+    // Gist sync state — only shows spinner on the very first entry this session
+    var isSyncing   by remember { mutableStateOf(!adminGistSyncDone) }
     var syncMessage by remember { mutableStateOf("Syncing latest graph from Gist…") }
 
-    // On entry: pull the latest graph from the Gist first so any new
-    // recording is always layered on top of the full existing dataset.
+    // On first entry this session: pull the latest graph from the Gist and
+    // MERGE it into the local DB (no clear) so any locally recorded nodes
+    // that haven't been uploaded yet are never wiped.
+    // On re-entry after recording: skip the sync and just refresh counts.
     LaunchedEffect(Unit) {
-        val result = NavGistSync.download()
-        result.onSuccess { export ->
-            withContext(Dispatchers.IO) {
-                db.navDao().clearEdges()
-                db.navDao().clearNodes()
-                export.nodes.forEach { db.navDao().insertNode(it) }
-                export.edges.forEach { db.navDao().insertEdge(it) }
+        if (!adminGistSyncDone) {
+            val result = NavGistSync.download()
+            result.onSuccess { export ->
+                withContext(Dispatchers.IO) {
+                    // Upsert — existing IDs get overwritten with identical Gist data (no-op),
+                    // locally recorded nodes (not yet in Gist) are untouched.
+                    export.nodes.forEach { db.navDao().insertNode(it) }
+                    export.edges.forEach { db.navDao().insertEdge(it) }
+                }
             }
+            adminGistSyncDone = true
+            syncMessage = result.fold(
+                onSuccess = { "Graph up to date" },
+                onFailure = { "Could not sync from Gist — using local data" }
+            )
         }
-        // Refresh counts from DB regardless of whether sync succeeded
-        nodeCount   = db.navDao().nodeCount()
-        edgeCount   = db.navDao().edgeCount()
-        syncMessage = result.fold(
-            onSuccess = { "Graph up to date (${nodeCount} nodes, ${edgeCount} edges)" },
-            onFailure = { "Could not sync from Gist — recording on local data only" }
-        )
+        // Refresh counts from DB (covers both first entry and post-recording re-entry)
+        nodeCount = db.navDao().nodeCount()
+        edgeCount = db.navDao().edgeCount()
         isSyncing = false
     }
 
