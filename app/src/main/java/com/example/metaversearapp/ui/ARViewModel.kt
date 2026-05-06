@@ -86,6 +86,14 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var testPathNodes by mutableStateOf<List<NavNode>>(emptyList())
         private set
 
+    /**
+     * Ordered A* path from the user's current position to [selectedDestination].
+     * Recomputed each time a new destination is chosen, and again once VPS
+     * tracking locks (in case the destination was selected before lock).
+     */
+    var destinationPathNodes by mutableStateOf<List<NavNode>>(emptyList())
+        private set
+
     init {
         syncLocations()
         syncNavGraph()
@@ -120,8 +128,12 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     }
 
     /**
-     * Downloads the latest nav graph from the GitHub Gist and replaces the local
-     * Room copy so all users automatically receive admin-recorded updates.
+     * Downloads the latest nav graph from the GitHub Gist and MERGES it into the
+     * local Room copy (upsert — no clear).  This means:
+     *  • Nodes/edges already in the Gist overwrite their local counterparts (same id).
+     *  • Locally recorded nodes that haven't been uploaded yet are preserved.
+     *  • An empty or unavailable Gist never wipes the local graph.
+     *
      * Runs silently — failures are swallowed so a missing/unconfigured Gist never
      * crashes the user-facing UI.
      */
@@ -131,12 +143,10 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 val result = NavGistSync.download()
                 result.onSuccess { export ->
                     withContext(Dispatchers.IO) {
-                        db.navDao().clearEdges()
-                        db.navDao().clearNodes()
+                        // Upsert only — never clear, so local-only nodes survive
                         export.nodes.forEach { db.navDao().insertNode(it) }
                         export.edges.forEach { db.navDao().insertEdge(it) }
                     }
-                    // No status update — the user doesn't need to see this happen
                 }
                 // Failures are silently ignored (token not set, no network, empty gist, etc.)
             } catch (_: Exception) { }
@@ -146,7 +156,41 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     fun onDestinationSelected(location: QrLocation) {
         selectedDestination = location
         isDropdownExpanded = false
+        destinationPathNodes = emptyList()   // clear stale path while new one computes
         statusText = "Targeting ${location.name}"
+        computeDestinationPath()
+    }
+
+    /**
+     * Runs A* from the user's current corrected position to the nearest nav
+     * node to [selectedDestination].  Safe to call any time — silently does
+     * nothing if VPS isn't tracking yet or there is no destination selected.
+     * Called automatically on destination selection and whenever VPS first locks.
+     */
+    fun computeDestinationPath() {
+        val dest = selectedDestination ?: return
+        val pose = geospatialPose ?: return          // bail if not tracking yet
+
+        viewModelScope.launch {
+            val nodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
+            val edges = withContext(Dispatchers.IO) { db.navDao().getAllEdges() }
+            if (nodes.isEmpty()) return@launch
+
+            val corrLat   = pose.latitude  - latOffset
+            val corrLon   = pose.longitude - lonOffset
+            val startNode = NavGraphPathfinder.nearestNode(nodes, corrLat, corrLon)
+            val endNode   = NavGraphPathfinder.nearestNode(nodes, dest.lat, dest.lon)
+
+            if (startNode != null && endNode != null) {
+                val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
+                destinationPathNodes = path
+                if (path.isNotEmpty()) {
+                    statusText = "Route to ${dest.name}: ${path.size} waypoints"
+                } else {
+                    statusText = "No path to ${dest.name} — check nav graph coverage"
+                }
+            }
+        }
     }
 
     /**

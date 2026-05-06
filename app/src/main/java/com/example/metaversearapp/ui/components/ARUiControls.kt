@@ -31,6 +31,16 @@ fun ARUiOverlay(viewModel: ARViewModel) {
 
             DestinationSelector(viewModel)
 
+            // 2-D path overview for the room-destination route
+            if (viewModel.destinationPathNodes.size >= 2) {
+                Spacer(modifier = Modifier.height(4.dp))
+                PathArrowsOverlay(
+                    pathNodes   = viewModel.destinationPathNodes,
+                    label       = "Route to ${viewModel.selectedDestination?.name ?: "destination"}",
+                    accentColor = Color(0xFFFFCC02)
+                )
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
 
             Button(
@@ -63,7 +73,7 @@ fun ARUiOverlay(viewModel: ARViewModel) {
                 Text(buttonLabel)
             }
 
-            // Path arrows — visible once A* has produced a result
+            // Path arrows — visible once A* has produced a result for the test pins
             if (viewModel.testPathNodes.size >= 2) {
                 Spacer(modifier = Modifier.height(4.dp))
                 PathArrowsOverlay(pathNodes = viewModel.testPathNodes)
@@ -96,8 +106,23 @@ fun ARUiOverlay(viewModel: ARViewModel) {
  * Each arrow is rotated to the compass bearing of its segment (0° = north,
  * clockwise), giving an at-a-glance overview of the full route shape.
  */
+/**
+ * Horizontal scrollable bar that visualises an A* path as a sequence of
+ * directional arrows — one per segment — bookended by location pins.
+ *
+ * @param pathNodes   The ordered list of nav nodes forming the path.
+ * @param label       Header text.  Defaults to "A★ Path · N waypoints · M segments".
+ * @param accentColor Tint for the arrows and header.  Defaults to teal (test-pin path).
+ */
 @Composable
-fun PathArrowsOverlay(pathNodes: List<NavNode>) {
+fun PathArrowsOverlay(
+    pathNodes: List<NavNode>,
+    label: String? = null,
+    accentColor: Color = Color(0xFF64FFDA)
+) {
+    val headerText = label
+        ?: "A★ Path  ·  ${pathNodes.size} waypoints  ·  ${pathNodes.size - 1} segments"
+
     Card(
         modifier = Modifier
             .padding(horizontal = 16.dp)
@@ -109,9 +134,9 @@ fun PathArrowsOverlay(pathNodes: List<NavNode>) {
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(
-                text = "A★ Path  ·  ${pathNodes.size} waypoints  ·  ${pathNodes.size - 1} segments",
+                text  = headerText,
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(0xFF64FFDA)
+                color = accentColor
             )
             Spacer(modifier = Modifier.height(6.dp))
             Row(
@@ -121,7 +146,7 @@ fun PathArrowsOverlay(pathNodes: List<NavNode>) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                // Green start pin
+                // Start pin
                 Icon(
                     imageVector = Icons.Default.LocationOn,
                     contentDescription = "Start",
@@ -129,7 +154,7 @@ fun PathArrowsOverlay(pathNodes: List<NavNode>) {
                     modifier = Modifier.size(22.dp)
                 )
 
-                // One arrow per segment, rotated to the segment's compass bearing
+                // One arrow per segment, rotated to its compass bearing
                 pathNodes.zipWithNext().forEach { (from, to) ->
                     val bearing = segmentBearing(from.lat, from.lon, to.lat, to.lon).toFloat()
                     Icon(
@@ -138,11 +163,11 @@ fun PathArrowsOverlay(pathNodes: List<NavNode>) {
                         modifier = Modifier
                             .size(20.dp)
                             .rotate(bearing),
-                        tint = Color(0xFF64FFDA)
+                        tint = accentColor
                     )
                 }
 
-                // Red end pin
+                // End pin
                 Icon(
                     imageVector = Icons.Default.LocationOn,
                     contentDescription = "End",
