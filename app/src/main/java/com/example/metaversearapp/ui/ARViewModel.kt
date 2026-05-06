@@ -52,7 +52,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         private set
     var altOffset by mutableDoubleStateOf(0.0)
         private set
-    var isCalibrated by mutableStateOf(true)
+    /**
+     * True only after a QR code has been successfully scanned this session.
+     * Starts false so the UI can warn the user before they rely on path accuracy.
+     */
+    var isCalibrated by mutableStateOf(false)
         private set
 
     // Accuracy Metrics
@@ -235,7 +239,10 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             WaypointMode.AWAIT_START -> {
                 startPin = WaypointPin(pose.latitude, pose.longitude, pose.altitude - 1.7)
                 waypointMode = WaypointMode.AWAIT_END
-                statusText = "Start pin placed — walk to the end point and tap again"
+                statusText = if (!isCalibrated)
+                    "Start pin placed — ⚠ scan a QR first for accurate arrows"
+                else
+                    "Start pin placed — walk to the end point and tap again"
             }
 
             WaypointMode.AWAIT_END -> {
@@ -253,7 +260,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                         return@launch
                     }
 
-                    // Convert raw VPS coords to corrected coords for nearest-node lookup
+                    // Convert raw VPS coords to corrected coords for nearest-node lookup.
+                    // If the user hasn't scanned a QR code this session (latOffset == 0),
+                    // their raw VPS position may differ from the stored corrected node
+                    // coordinates by several metres — arrows will still be created but
+                    // may appear offset from the real-world path until calibration is done.
                     val correctedStartLat = startPin!!.rawLat - latOffset
                     val correctedStartLon = startPin!!.rawLon - lonOffset
                     val correctedEndLat   = newEnd.rawLat - latOffset
@@ -262,15 +273,38 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                     val startNode = NavGraphPathfinder.nearestNode(nodes, correctedStartLat, correctedStartLon)
                     val endNode   = NavGraphPathfinder.nearestNode(nodes, correctedEndLat,   correctedEndLon)
 
-                    if (startNode != null && endNode != null) {
-                        val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
-                        testPathNodes = path
-                        statusText = if (path.isNotEmpty())
-                            "Path found: ${path.size} waypoints"
-                        else
-                            "No path found between these locations"
-                    } else {
+                    if (startNode == null || endNode == null) {
                         statusText = "No nearby nav nodes — record a path here in Admin first"
+                        return@launch
+                    }
+
+                    // Warn if the nearest node is suspiciously far — this usually means
+                    // the session isn't calibrated and the coordinate spaces don't align.
+                    val startDist = NavGraphPathfinder.haversine(
+                        correctedStartLat, correctedStartLon, startNode.lat, startNode.lon)
+                    val endDist   = NavGraphPathfinder.haversine(
+                        correctedEndLat, correctedEndLon, endNode.lat, endNode.lon)
+                    val maxDist   = maxOf(startDist, endDist)
+
+                    if (maxDist > 30.0) {
+                        statusText = "⚠ Nearest node is ${maxDist.toInt()} m away — " +
+                            "scan a QR code to calibrate so arrows appear in the right place"
+                        // Still run A* so the overlay arrows show (they just may be offset)
+                    }
+
+                    if (startNode.id == endNode.id) {
+                        statusText = "Start and end map to the same nav node — " +
+                            if (!isCalibrated) "try scanning a QR code to calibrate first"
+                            else "place pins further apart or add more nodes in this area"
+                        return@launch
+                    }
+
+                    val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
+                    testPathNodes = path
+                    statusText = when {
+                        path.isEmpty() -> "No path found — graph may be disconnected here"
+                        !isCalibrated  -> "Path found (${path.size} waypoints) — scan QR for accurate arrow placement"
+                        else           -> "Path found: ${path.size} waypoints"
                     }
                 }
             }

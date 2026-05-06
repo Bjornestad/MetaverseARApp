@@ -36,6 +36,7 @@ import com.example.metaversearapp.data.NavGraphExport
 import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
+import com.example.metaversearapp.data.QrLocation
 import com.google.ar.core.Config
 import com.google.ar.core.Earth
 import com.google.ar.core.GeospatialPose
@@ -71,6 +72,7 @@ private var adminGistSyncDone = false
 private const val MIN_NODE_DISTANCE_M     = 1.5      // metres between auto-captured nodes
 private const val CAPTURE_INTERVAL_MS     = 2_000L   // max capture rate
 private const val STAIR_CONNECT_RADIUS_M  = 20.0     // max horizontal metres to auto-link stair endpoints
+private const val QR_LINK_RADIUS_M        = 12.0     // max metres to auto-link a DOOR node to a nearby QR room anchor
 
 private val FLOOR_OPTIONS = listOf("-2","-1","0", "1", "2", "3", "4", "5")
 
@@ -484,6 +486,11 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
     var statusMsg            by remember { mutableStateOf("Ready — tap Start Recording, or scan a QR to improve accuracy") }
     var lastNodeType         by remember { mutableStateOf(NodeType.WAYPOINT) }
 
+    // Door → QR link picker
+    var showDoorLinkDialog  by remember { mutableStateOf(false) }
+    var doorLinkCandidates  by remember { mutableStateOf<List<Pair<QrLocation, Double>>>(emptyList()) }
+    var pendingDoorNode     by remember { mutableStateOf<NavNode?>(null) }
+
     /**
      * Updates the last recorded node's type in the DB.
      * For STAIR_TOP / STAIR_BOTTOM: also scans for the complementary stair
@@ -528,7 +535,46 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                     statusMsg = "Marked + auto-connected to $connected stair node(s) on other floor(s)"
                 }
             }
+
+            // For DOOR nodes: collect all QR room anchors within QR_LINK_RADIUS_M,
+            // sorted by distance, and surface a picker dialog so the admin can choose
+            // the correct room (or skip if none are close / the auto-pick would be wrong).
+            if (type == NodeType.DOOR) {
+                val candidates = db.qrDao().getAll()
+                    .map { qr -> qr to NavGraphPathfinder.haversine(node.lat, node.lon, qr.lat, qr.lon) }
+                    .filter { (_, dist) -> dist <= QR_LINK_RADIUS_M }
+                    .sortedBy { (_, dist) -> dist }
+
+                if (candidates.isNotEmpty()) {
+                    pendingDoorNode    = updated
+                    doorLinkCandidates = candidates
+                    showDoorLinkDialog = true
+                    statusMsg = "Choose which room this door belongs to…"
+                }
+                // No candidates within radius → node stays at its VPS position unlinked;
+                // statusMsg already reads "Marked as Door"
+            }
         }
+    }
+
+    /** Snap [pendingDoorNode] to [qr]'s ground-truth coords and persist the link. */
+    fun linkDoorToQr(qr: QrLocation) {
+        val node = pendingDoorNode ?: return
+        scope.launch {
+            val linked = node.copy(
+                anchorQrId = qr.qrID,
+                label      = qr.name,
+                lat        = qr.lat,
+                lon        = qr.lon,
+                alt        = if (qr.alt != 0.0) qr.alt else node.alt
+            )
+            db.navDao().updateNode(linked)
+            lastRecordedNode = linked
+            statusMsg = "Door linked to '${qr.name}'"
+        }
+        showDoorLinkDialog = false
+        pendingDoorNode    = null
+        doorLinkCandidates = emptyList()
     }
 
     // QR scanning
@@ -964,6 +1010,75 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                 }
             }
         }
+    }
+
+    // ── Door → QR link picker dialog ─────────────────────────────────────────
+    if (showDoorLinkDialog && doorLinkCandidates.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = {
+                showDoorLinkDialog = false
+                pendingDoorNode    = null
+                doorLinkCandidates = emptyList()
+                statusMsg = "Marked as Door (no room linked)"
+            },
+            containerColor = Color(0xFF1E1E1E),
+            title = {
+                Text(
+                    "Link door to room",
+                    color      = Color(0xFF64FFDA),
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        "Nearby rooms — choose the one this door leads to:",
+                        color    = Color.Gray,
+                        fontSize = 13.sp
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    doorLinkCandidates.forEach { (qr, dist) ->
+                        OutlinedButton(
+                            onClick  = { linkDoorToQr(qr) },
+                            modifier = Modifier.fillMaxWidth(),
+                            shape    = RoundedCornerShape(8.dp),
+                            colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+                            border   = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f))
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp)
+                            ) {
+                                Text(
+                                    qr.name,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize   = 14.sp
+                                )
+                                Text(
+                                    "${dist.toInt()} m away  ·  ${qr.building}  ·  Floor ${qr.floor}",
+                                    color    = Color.Gray,
+                                    fontSize = 11.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showDoorLinkDialog = false
+                        pendingDoorNode    = null
+                        doorLinkCandidates = emptyList()
+                        statusMsg = "Marked as Door (no room linked)"
+                    }
+                ) {
+                    Text("Skip — leave unlinked", color = Color.Gray)
+                }
+            }
+        )
     }
 }
 

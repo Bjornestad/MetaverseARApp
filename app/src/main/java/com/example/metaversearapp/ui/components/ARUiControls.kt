@@ -2,17 +2,21 @@ package com.example.metaversearapp.ui.components
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.ui.ARViewModel
 import kotlin.math.*
@@ -43,13 +47,43 @@ fun ARUiOverlay(viewModel: ARViewModel) {
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // Calibration banner — shown until the user scans a QR code this session.
+            // Without calibration the VPS coordinate space may be drifted from the
+            // stored nav graph, causing path arrows to appear in the wrong location.
+            if (!viewModel.isCalibrated) {
+                Card(
+                    modifier = Modifier
+                        .padding(horizontal = 16.dp)
+                        .fillMaxWidth(),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFF7A3E00).copy(alpha = 0.92f)
+                    )
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("⚠", fontSize = 16.sp)
+                        Text(
+                            "Not calibrated — scan a QR code for accurate path arrows",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color(0xFFFFCC80)
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
             Button(
                 onClick = { viewModel.toggleScanning() },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (viewModel.isScanning) Color.Red else MaterialTheme.colorScheme.primary
+                    containerColor = if (viewModel.isScanning) Color.Red
+                                     else if (!viewModel.isCalibrated) Color(0xFF1565C0)
+                                     else MaterialTheme.colorScheme.primary
                 )
             ) {
-                Text(if (viewModel.isScanning) "Cancel Scan" else "Scan QR to Improve Accuracy")
+                Text(if (viewModel.isScanning) "Cancel Scan" else "Scan QR to Calibrate")
             }
 
             Spacer(modifier = Modifier.height(4.dp))
@@ -194,6 +228,16 @@ private fun segmentBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Doubl
 
 @Composable
 fun DestinationSelector(viewModel: ARViewModel) {
+    // Local search query — reset whenever the dialog closes
+    var searchQuery by remember { mutableStateOf("") }
+
+    val filtered = remember(searchQuery, viewModel.allLocations) {
+        val q = searchQuery.trim()
+        if (q.isBlank()) viewModel.allLocations
+        else viewModel.allLocations.filter { it.name.contains(q, ignoreCase = true) }
+    }
+
+    // ── Trigger button ────────────────────────────────────────────────────────
     Card(
         modifier = Modifier
             .padding(horizontal = 16.dp)
@@ -204,25 +248,119 @@ fun DestinationSelector(viewModel: ARViewModel) {
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
             Text("Target Destination:", style = MaterialTheme.typography.labelMedium)
-            Box {
-                OutlinedButton(
-                    onClick = { viewModel.isDropdownExpanded = true },
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(viewModel.selectedDestination?.name ?: "Select Room")
-                }
-                DropdownMenu(
-                    expanded = viewModel.isDropdownExpanded,
-                    onDismissRequest = { viewModel.isDropdownExpanded = false }
-                ) {
-                    viewModel.allLocations.forEach { loc ->
-                        DropdownMenuItem(
-                            text = { Text(loc.name) },
-                            onClick = { viewModel.onDestinationSelected(loc) }
-                        )
-                    }
-                }
+            OutlinedButton(
+                onClick   = { viewModel.isDropdownExpanded = true },
+                modifier  = Modifier.fillMaxWidth()
+            ) {
+                Text(viewModel.selectedDestination?.name ?: "Select Room")
             }
         }
+    }
+
+    // ── Picker dialog ─────────────────────────────────────────────────────────
+    if (viewModel.isDropdownExpanded) {
+        AlertDialog(
+            onDismissRequest = {
+                viewModel.isDropdownExpanded = false
+                searchQuery = ""
+            },
+            containerColor = Color(0xFF1A1A2E),
+            title = {
+                Text(
+                    "Select destination",
+                    color    = Color(0xFF64FFDA),
+                    fontSize = 16.sp
+                )
+            },
+            text = {
+                Column {
+                    // Search field
+                    OutlinedTextField(
+                        value         = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        placeholder   = { Text("Search rooms…", color = Color.Gray) },
+                        leadingIcon   = {
+                            Icon(Icons.Default.Search, contentDescription = null, tint = Color.Gray)
+                        },
+                        singleLine    = true,
+                        colors        = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor   = Color(0xFF64FFDA),
+                            unfocusedBorderColor = Color.Gray,
+                            focusedTextColor     = Color.White,
+                            unfocusedTextColor   = Color.White,
+                            cursorColor          = Color(0xFF64FFDA)
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    when {
+                        viewModel.allLocations.isEmpty() -> {
+                            Text(
+                                "No rooms loaded yet",
+                                color    = Color.Gray,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                        filtered.isEmpty() -> {
+                            Text(
+                                "No rooms match \"$searchQuery\"",
+                                color    = Color.Gray,
+                                fontSize = 13.sp,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+                        else -> {
+                            LazyColumn(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 320.dp)
+                            ) {
+                                items(filtered, key = { it.qrID }) { loc ->
+                                    TextButton(
+                                        onClick  = {
+                                            viewModel.onDestinationSelected(loc)
+                                            viewModel.isDropdownExpanded = false
+                                            searchQuery = ""
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalAlignment = Alignment.Start
+                                        ) {
+                                            Text(
+                                                loc.name,
+                                                color    = Color.White,
+                                                fontSize = 14.sp
+                                            )
+                                            Text(
+                                                "${loc.building}  ·  Floor ${loc.floor}",
+                                                color    = Color.Gray,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                    HorizontalDivider(color = Color.White.copy(alpha = 0.06f))
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.isDropdownExpanded = false
+                        searchQuery = ""
+                    }
+                ) {
+                    Text("Cancel", color = Color.Gray)
+                }
+            }
+        )
     }
 }
