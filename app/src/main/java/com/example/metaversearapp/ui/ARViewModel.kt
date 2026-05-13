@@ -166,10 +166,16 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     }
 
     /**
-     * Runs A* from the user's current corrected position to the nearest nav
-     * node to [selectedDestination].  Safe to call any time — silently does
-     * nothing if VPS isn't tracking yet or there is no destination selected.
-     * Called automatically on destination selection and whenever VPS first locks.
+     * Runs A* from the user's current corrected position to [selectedDestination].
+     *
+     * End-node resolution order:
+     *  1. A DOOR node whose [NavNode.anchorQrId] matches the destination's QR ID —
+     *     this is the node recorded at the physical door, which is more accurate
+     *     than the room-centre coordinates stored in [QrLocation].
+     *  2. Fallback: the nav node nearest to [QrLocation.lat]/[QrLocation.lon].
+     *
+     * Safe to call any time — silently does nothing if VPS isn't tracking yet
+     * or there is no destination selected.
      */
     fun computeDestinationPath() {
         val dest = selectedDestination ?: return
@@ -183,7 +189,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             val corrLat   = pose.latitude  - latOffset
             val corrLon   = pose.longitude - lonOffset
             val startNode = NavGraphPathfinder.nearestNode(nodes, corrLat, corrLon)
-            val endNode   = NavGraphPathfinder.nearestNode(nodes, dest.lat, dest.lon)
+
+            // Prefer a DOOR node linked to this QR over the room-centre coordinates,
+            // since the door node was recorded at the actual physical door location.
+            val endNode = nodes.firstOrNull { it.anchorQrId == dest.qrID }
+                ?: NavGraphPathfinder.nearestNode(nodes, dest.lat, dest.lon)
 
             if (startNode != null && endNode != null) {
                 val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)

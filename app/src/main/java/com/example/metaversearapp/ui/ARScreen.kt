@@ -145,15 +145,12 @@ fun ARScreen(
         if (path.size < 2) return@LaunchedEffect
         val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
 
-        destArrowAnchors = path.zipWithNext().mapNotNull { (a, b) ->
-            val midLat  = (a.lat + b.lat) / 2.0
-            val midLon  = (a.lon + b.lon) / 2.0
-            val bearing = NavGraphPathfinder.bearing(a.lat, a.lon, b.lat, b.lon)
-            val q       = NavGraphPathfinder.bearingToQuaternion(bearing)
+        destArrowAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+            val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
             try {
                 earth.createAnchor(
-                    midLat + viewModel.latOffset,
-                    midLon + viewModel.lonOffset,
+                    pt.lat + viewModel.latOffset,
+                    pt.lon + viewModel.lonOffset,
                     floorAlt,
                     q[0], q[1], q[2], q[3]
                 )
@@ -186,7 +183,7 @@ fun ARScreen(
         endPinAnchor = earth.createAnchor(pin.rawLat, pin.rawLon, pin.alt, 0f, 0f, 0f, 1f)
     }
 
-    // Create one directional arrow anchor per path segment (midpoint, bearing-rotated, VPS-offset)
+    // Create evenly-spaced directional arrow anchors along the A* test path
     LaunchedEffect(viewModel.testPathNodes, earthRef.value, viewModel.earthTrackingState) {
         testCrumbAnchors.forEach { it.detach() }
         testCrumbAnchors = emptyList()
@@ -196,15 +193,12 @@ fun ARScreen(
         if (path.size < 2) return@LaunchedEffect
         val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
 
-        testCrumbAnchors = path.zipWithNext().mapNotNull { (a, b) ->
-            val midLat  = (a.lat + b.lat) / 2.0
-            val midLon  = (a.lon + b.lon) / 2.0
-            val bearing = NavGraphPathfinder.bearing(a.lat, a.lon, b.lat, b.lon)
-            val q       = NavGraphPathfinder.bearingToQuaternion(bearing)
+        testCrumbAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+            val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
             try {
                 earth.createAnchor(
-                    midLat + viewModel.latOffset,
-                    midLon + viewModel.lonOffset,
+                    pt.lat + viewModel.latOffset,
+                    pt.lon + viewModel.lonOffset,
                     floorAlt,
                     q[0], q[1], q[2], q[3]
                 )

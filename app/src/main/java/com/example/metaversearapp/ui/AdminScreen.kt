@@ -73,6 +73,7 @@ private const val MIN_NODE_DISTANCE_M     = 1.5      // metres between auto-capt
 private const val CAPTURE_INTERVAL_MS     = 2_000L   // max capture rate
 private const val STAIR_CONNECT_RADIUS_M  = 20.0     // max horizontal metres to auto-link stair endpoints
 private const val QR_LINK_RADIUS_M        = 12.0     // max metres to auto-link a DOOR node to a nearby QR room anchor
+private const val SEGMENT_SNAP_RADIUS_M   = 5.0      // max metres to auto-bridge a new node to an existing one during recording
 
 private val FLOOR_OPTIONS = listOf("-2","-1","0", "1", "2", "3", "4", "5")
 
@@ -81,6 +82,10 @@ private val FLOOR_OPTIONS = listOf("-2","-1","0", "1", "2", "3", "4", "5")
 fun AdminScreen(db: AppDatabase, onExitAdmin: () -> Unit) {
     var isAuthenticated by remember { mutableStateOf(false) }
     var isRecording     by remember { mutableStateOf(false) }
+    // Hoisted so floor selection persists when the user goes back to the hub
+    // between recording sessions (AdminRecordingScreen is destroyed on finish,
+    // which would otherwise reset the remember state to "1").
+    var currentFloor    by remember { mutableStateOf("1") }
 
     if (!isAuthenticated) {
         PinGateScreen(
@@ -95,8 +100,10 @@ fun AdminScreen(db: AppDatabase, onExitAdmin: () -> Unit) {
         )
     } else {
         AdminRecordingScreen(
-            db        = db,
-            onFinished = { isRecording = false }
+            db           = db,
+            currentFloor = currentFloor,
+            onFloorChange = { currentFloor = it },
+            onFinished   = { isRecording = false }
         )
     }
 }
@@ -434,7 +441,12 @@ private fun AdminHubScreen(
 
 // ── Recording Screen ──────────────────────────────────────────────────────────
 @Composable
-private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
+private fun AdminRecordingScreen(
+    db: AppDatabase,
+    currentFloor: String,
+    onFloorChange: (String) -> Unit,
+    onFinished: () -> Unit
+) {
     val scope         = rememberCoroutineScope()
     val context       = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -478,13 +490,17 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
 
     // Recording state
     var isRecording          by remember { mutableStateOf(false) }
-    var currentFloor         by remember { mutableStateOf("1") }
     var sessionNodes         by remember { mutableIntStateOf(0) }
     var sessionEdges         by remember { mutableIntStateOf(0) }
     var lastRecordedNode     by remember { mutableStateOf<NavNode?>(null) }
     var lastCaptureTime      by remember { mutableLongStateOf(0L) }
     var statusMsg            by remember { mutableStateOf("Ready — tap Start Recording, or scan a QR to improve accuracy") }
     var lastNodeType         by remember { mutableStateOf(NodeType.WAYPOINT) }
+
+    // Auto-bridging: nodes loaded at recording start; tracks which existing nodes
+    // have already been bridged to avoid duplicate edges during a single walk.
+    var preloadedNodes   by remember { mutableStateOf<List<NavNode>>(emptyList()) }
+    val bridgedNodeIds    = remember { mutableSetOf<String>() }
 
     // Door → QR link picker
     var showDoorLinkDialog  by remember { mutableStateOf(false) }
@@ -648,6 +664,36 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                                                 )
                                             )
                                             sessionEdges++
+                                        }
+
+                                        // ── Auto-bridge to nearby pre-existing nodes ──
+                                        // For each node that was in the graph before this
+                                        // recording session started, if it's within
+                                        // SEGMENT_SNAP_RADIUS_M and we haven't already
+                                        // linked it this session, create a bidirectional
+                                        // bridge edge so separate recorded segments
+                                        // stay connected for A*.
+                                        val bridges = preloadedNodes.filter { existing ->
+                                            existing.id != newNode.id &&
+                                            existing.id != prevNode?.id &&
+                                            existing.id !in bridgedNodeIds &&
+                                            NavGraphPathfinder.haversine(
+                                                newNode.lat, newNode.lon,
+                                                existing.lat, existing.lon
+                                            ) <= SEGMENT_SNAP_RADIUS_M
+                                        }
+                                        for (nearby in bridges) {
+                                            val bridgeDist = NavGraphPathfinder.distance3d(
+                                                newNode.lat,  newNode.lon,  newNode.alt,
+                                                nearby.lat,   nearby.lon,   nearby.alt
+                                            )
+                                            db.navDao().insertEdge(NavEdge(newNode.id, nearby.id, bridgeDist))
+                                            db.navDao().insertEdge(NavEdge(nearby.id, newNode.id, bridgeDist))
+                                            bridgedNodeIds.add(nearby.id)
+                                            sessionEdges += 2
+                                        }
+                                        if (bridges.isNotEmpty()) {
+                                            statusMsg = "Auto-bridged to ${bridges.size} nearby segment(s)"
                                         }
                                     }
                                 }
@@ -850,7 +896,7 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                             FLOOR_OPTIONS.forEach { fl ->
                                 FilterChip(
                                     selected = currentFloor == fl,
-                                    onClick  = { currentFloor = fl },
+                                    onClick  = { onFloorChange(fl) },
                                     label    = { Text(fl, fontSize = 12.sp) },
                                     colors   = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = Color(0xFF64FFDA),
@@ -969,7 +1015,13 @@ private fun AdminRecordingScreen(db: AppDatabase, onFinished: () -> Unit) {
                         if (isRecording) {
                             lastRecordedNode = null
                             lastNodeType     = NodeType.WAYPOINT
-                            statusMsg = "Recording — walk the corridor"
+                            bridgedNodeIds.clear()
+                            // Snapshot the graph that exists before this segment so we can
+                            // auto-bridge to it during recording without hitting the DB every frame.
+                            scope.launch {
+                                preloadedNodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
+                                statusMsg = "Recording — walk the corridor"
+                            }
                         } else {
                             statusMsg = "Paused — mark waypoint type or start new segment"
                         }
