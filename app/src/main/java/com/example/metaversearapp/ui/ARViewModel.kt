@@ -8,6 +8,7 @@ import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
+import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
 import com.example.metaversearapp.data.toEntity
 import com.example.metaversearapp.data.QrFeature
@@ -38,6 +39,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var selectedDestination by mutableStateOf<QrLocation?>(null)
     var isDropdownExpanded by mutableStateOf(false)
     var isScanning by mutableStateOf(false)
+
+    // Corridor-calibration feedback
+    /** Briefly true while the centroid calibration coroutine is running. */
+    var isCorridorCalibrating by mutableStateOf(false)
+        private set
 
     // --- AR / Geospatial State ---
     var geospatialPose by mutableStateOf<GeospatialPose?>(null)
@@ -233,6 +239,74 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     }
 
     /**
+     * Corridor centroid calibration — the user has declared they are standing
+     * in the **middle** of a group of nearby recorded nodes (e.g. | x x USER x x |).
+     *
+     * Algorithm:
+     *  1. Collect all nodes within [CENTROID_RADIUS_M] metres of the raw VPS pose.
+     *  2. If fewer than 2 nodes qualify, fall back to the 4 nearest regardless of
+     *     distance (gives a sensible result even in sparse graphs).
+     *  3. Compute the geographic centroid (average lat and average lon).
+     *  4. Snap the VPS coordinate system so that raw-VPS centroid == stored centroid.
+     *
+     * This tends to be more accurate than snapping to a single node because random
+     * VPS error is partially cancelled out across multiple reference points.
+     */
+    fun calibrateAtCorridorCentroid() {
+        val pose = geospatialPose ?: run {
+            statusText = "No VPS lock yet — wait for tracking then try again"
+            return
+        }
+        isCorridorCalibrating = true
+        viewModelScope.launch {
+            val nodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
+            if (nodes.isEmpty()) {
+                statusText = "No nav graph recorded — cannot calibrate this way"
+                isCorridorCalibrating = false
+                return@launch
+            }
+
+            val withDist = nodes.map { node ->
+                node to NavGraphPathfinder.haversine(pose.latitude, pose.longitude, node.lat, node.lon)
+            }
+
+            // Collect candidate nodes (within radius, or nearest 4 as a sparse-graph fallback)
+            val nearby = withDist.filter { (_, d) -> d <= CENTROID_RADIUS_M }
+                .ifEmpty { withDist.sortedBy { (_, d) -> d }.take(4) }
+
+            // Inverse-distance weighting (power = 2): nodes that are closer pull harder.
+            // This means a sparse or off-axis node has much less influence than a nearby one,
+            // so the centroid stays anchored to where the user actually is rather than being
+            // dragged toward a distant cluster.
+            //
+            // Edge case: if the user is standing almost exactly on a recorded node (< 0.1 m),
+            // snap straight to that node rather than dividing by near-zero.
+            val exactHit = nearby.firstOrNull { (_, d) -> d < 0.1 }
+            val (centroidLat, centroidLon) = if (exactHit != null) {
+                exactHit.first.lat to exactHit.first.lon
+            } else {
+                val totalWeight = nearby.sumOf { (_, d) -> 1.0 / (d * d) }
+                val wLat = nearby.sumOf { (n, d) -> n.lat / (d * d) } / totalWeight
+                val wLon = nearby.sumOf { (n, d) -> n.lon / (d * d) } / totalWeight
+                wLat to wLon
+            }
+
+            latOffset    = pose.latitude  - centroidLat
+            lonOffset    = pose.longitude - centroidLon
+            isCalibrated = true
+            isCorridorCalibrating = false
+
+            statusText = "Calibrated — averaged ${nearby.size} surrounding nodes"
+            computeDestinationPath()
+        }
+    }
+
+    companion object {
+        /** Nodes within this radius (metres) are included in the corridor centroid. */
+        private const val CENTROID_RADIUS_M = 20.0
+    }
+
+    /**
      * Cycles through the three waypoint placement steps:
      *
      * 1st tap → places the **start pin** at the current geospatial position
@@ -258,7 +332,9 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             WaypointMode.AWAIT_END -> {
                 val newEnd = WaypointPin(pose.latitude, pose.longitude, pose.altitude - 1.7)
                 endPin = newEnd
-                waypointMode = WaypointMode.PATH_READY
+                waypointMode  = WaypointMode.PATH_READY
+                testPathNodes = emptyList()   // clear previous arrows immediately while A* runs
+                statusText    = "Computing path…"
 
                 // Run A* on the background thread
                 viewModelScope.launch {

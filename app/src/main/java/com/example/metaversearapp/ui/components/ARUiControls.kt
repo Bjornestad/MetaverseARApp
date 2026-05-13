@@ -1,5 +1,6 @@
 package com.example.metaversearapp.ui.components
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -47,9 +48,7 @@ fun ARUiOverlay(viewModel: ARViewModel) {
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Calibration banner — shown until the user scans a QR code this session.
-            // Without calibration the VPS coordinate space may be drifted from the
-            // stored nav graph, causing path arrows to appear in the wrong location.
+            // Calibration banner — shown until calibrated via QR or corridor snap.
             if (!viewModel.isCalibrated) {
                 Card(
                     modifier = Modifier
@@ -59,31 +58,78 @@ fun ARUiOverlay(viewModel: ARViewModel) {
                         containerColor = Color(0xFF7A3E00).copy(alpha = 0.92f)
                     )
                 ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("⚠", fontSize = 16.sp)
-                        Text(
-                            "Not calibrated — scan a QR code for accurate path arrows",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color(0xFFFFCC80)
-                        )
+                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text("⚠", fontSize = 14.sp)
+                            Text(
+                                "Not calibrated — path arrows may appear offset",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFFFCC80)
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            // Option 1: scan a QR code
+                            OutlinedButton(
+                                onClick  = { viewModel.toggleScanning() },
+                                modifier = Modifier.weight(1f),
+                                colors   = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = if (viewModel.isScanning) Color.Red
+                                                   else Color(0xFF64FFDA)
+                                ),
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (viewModel.isScanning) Color.Red else Color(0xFF64FFDA)
+                                ),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    if (viewModel.isScanning) "Cancel" else "Scan QR",
+                                    fontSize = 12.sp
+                                )
+                            }
+                            // Option 2: centroid-snap from surrounding corridor nodes
+                            OutlinedButton(
+                                onClick  = { viewModel.calibrateAtCorridorCentroid() },
+                                enabled  = !viewModel.isScanning && !viewModel.isCorridorCalibrating,
+                                modifier = Modifier.weight(1f),
+                                colors   = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color(0xFFFFCC80)
+                                ),
+                                border = BorderStroke(
+                                    1.dp, Color(0xFFFFCC80).copy(alpha = 0.6f)
+                                ),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
+                            ) {
+                                Text(
+                                    if (viewModel.isCorridorCalibrating) "Calibrating…"
+                                    else "I'm mid-corridor",
+                                    fontSize = 12.sp
+                                )
+                            }
+                        }
                     }
                 }
                 Spacer(modifier = Modifier.height(4.dp))
             }
 
-            Button(
-                onClick = { viewModel.toggleScanning() },
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (viewModel.isScanning) Color.Red
-                                     else if (!viewModel.isCalibrated) Color(0xFF1565C0)
-                                     else MaterialTheme.colorScheme.primary
-                )
-            ) {
-                Text(if (viewModel.isScanning) "Cancel Scan" else "Scan QR to Calibrate")
+            // QR scan button — shown at all times so the user can re-calibrate
+            if (viewModel.isCalibrated) {
+                Button(
+                    onClick = { viewModel.toggleScanning() },
+                    colors  = ButtonDefaults.buttonColors(
+                        containerColor = if (viewModel.isScanning) Color.Red
+                                         else MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Text(if (viewModel.isScanning) "Cancel Scan" else "Scan QR to Recalibrate")
+                }
             }
 
             Spacer(modifier = Modifier.height(4.dp))
