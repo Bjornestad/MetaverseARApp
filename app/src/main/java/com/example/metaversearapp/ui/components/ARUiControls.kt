@@ -3,12 +3,19 @@ package com.example.metaversearapp.ui.components
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.LinearScale
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.MeetingRoom
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,16 +32,15 @@ import kotlin.math.*
 @Composable
 fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
     Box(modifier = Modifier.fillMaxSize()) {
+
+        // ── TOP: status + route overview ─────────────────────────────────────
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 16.dp),
+                .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             StatusOverlay(viewModel.statusText)
-            Spacer(modifier = Modifier.height(8.dp))
-
-            DestinationSelector(viewModel)
 
             // 2-D path overview for the room-destination route
             if (viewModel.destinationPathNodes.size >= 2) {
@@ -46,99 +52,9 @@ fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
                 )
             }
 
-            Spacer(modifier = Modifier.height(8.dp))
-
-            // Calibration banner — shown until calibrated via QR or corridor snap.
-            if (!viewModel.isCalibrated) {
-                Card(
-                    modifier = Modifier
-                        .padding(horizontal = 16.dp)
-                        .fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = Color(0xFF7A3E00).copy(alpha = 0.92f)
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text("⚠", fontSize = 14.sp)
-                            Text(
-                                "Not calibrated — path arrows may appear offset",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = Color(0xFFFFCC80)
-                            )
-                        }
-                        Spacer(modifier = Modifier.height(6.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            // Option 1: scan a QR code
-                            OutlinedButton(
-                                onClick  = { viewModel.toggleScanning() },
-                                modifier = Modifier.weight(1f),
-                                colors   = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = if (viewModel.isScanning) Color.Red
-                                                   else Color(0xFF64FFDA)
-                                ),
-                                border = BorderStroke(
-                                    1.dp,
-                                    if (viewModel.isScanning) Color.Red else Color(0xFF64FFDA)
-                                ),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    if (viewModel.isScanning) "Cancel" else "Scan QR",
-                                    fontSize = 12.sp
-                                )
-                            }
-                            // Option 2: centroid-snap from surrounding corridor nodes
-                            OutlinedButton(
-                                onClick  = { viewModel.calibrateAtCorridorCentroid() },
-                                enabled  = !viewModel.isScanning && !viewModel.isCorridorCalibrating,
-                                modifier = Modifier.weight(1f),
-                                colors   = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = Color(0xFFFFCC80)
-                                ),
-                                border = BorderStroke(
-                                    1.dp, Color(0xFFFFCC80).copy(alpha = 0.6f)
-                                ),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Text(
-                                    if (viewModel.isCorridorCalibrating) "Calibrating…"
-                                    else "I'm mid-corridor",
-                                    fontSize = 12.sp
-                                )
-                            }
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-
-            // QR scan button — shown at all times so the user can re-calibrate
-            if (viewModel.isCalibrated) {
-                Button(
-                    onClick = { viewModel.toggleScanning() },
-                    colors  = ButtonDefaults.buttonColors(
-                        containerColor = if (viewModel.isScanning) Color.Red
-                                         else MaterialTheme.colorScheme.primary
-                    )
-                ) {
-                    Text(if (viewModel.isScanning) "Cancel Scan" else "Scan QR to Recalibrate")
-                }
-            }
-
-
-            // ── Debug-only controls ───────────────────────────────────────────
+            // ── Debug-only controls ──────────────────────────────────────────
             if (showDebug) {
                 Spacer(modifier = Modifier.height(4.dp))
-
-                // Waypoint pin button — cycles: Set Start → Set End → Clear
-                // Used to manually test A* between two tapped positions.
                 val (buttonLabel, buttonColor) = when (viewModel.waypointMode) {
                     ARViewModel.WaypointMode.AWAIT_START -> "Set Start Point" to Color(0xFF1565C0)
                     ARViewModel.WaypointMode.AWAIT_END   -> "Set End Point"   to Color(0xFF2E7D32)
@@ -146,18 +62,12 @@ fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
                 }
                 Button(
                     onClick = { viewModel.placeWaypoint() },
-                    colors = ButtonDefaults.buttonColors(containerColor = buttonColor)
+                    colors  = ButtonDefaults.buttonColors(containerColor = buttonColor)
                 ) {
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
+                    Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(buttonLabel)
                 }
-
-                // 2-D arrow preview of the A* test path
                 if (viewModel.testPathNodes.size >= 2) {
                     Spacer(modifier = Modifier.height(4.dp))
                     PathArrowsOverlay(pathNodes = viewModel.testPathNodes)
@@ -165,22 +75,104 @@ fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
             }
         }
 
+        // ── BOTTOM: compass + control bar + debug overlay ────────────────────
         Column(
-            modifier = Modifier.align(Alignment.BottomCenter),
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            // VPS debug card — only shown when debug mode is on
+            if (showDebug) {
+                GeospatialBottomOverlay(viewModel = viewModel)
+                Spacer(modifier = Modifier.height(4.dp))
+            }
+
+            // Navigation compass arrow
             if (viewModel.selectedDestination != null && viewModel.geospatialPose != null) {
                 NavigationArrow(
                     currentPose = viewModel.geospatialPose!!,
                     destination = viewModel.selectedDestination!!,
-                    latOffset = viewModel.latOffset,
-                    lonOffset = viewModel.lonOffset
+                    latOffset   = viewModel.latOffset,
+                    lonOffset   = viewModel.lonOffset
                 )
             }
 
-            // VPS debug card — only shown when debug mode is on
-            if (showDebug) {
-                GeospatialBottomOverlay(viewModel = viewModel)
+            // ── Control bar ──────────────────────────────────────────────────
+            Card(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = OverlayBackground)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                        .fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    // Destination picker
+                    OutlinedIconButton(
+                        onClick = { viewModel.isDropdownExpanded = true },
+                        colors  = IconButtonDefaults.outlinedIconButtonColors(
+                            contentColor = Color(0xFF64FFDA)
+                        ),
+                        border = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.7f))
+                    ) {
+                        Icon(Icons.Default.MeetingRoom, contentDescription = "Select destination")
+                    }
+
+                    // Room name (or "not calibrated" hint when nothing selected)
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text     = viewModel.selectedDestination?.name ?: "Select room…",
+                            color    = if (viewModel.selectedDestination != null) Color.White
+                                       else Color.White.copy(alpha = 0.4f),
+                            fontSize = 13.sp
+                        )
+                        if (!viewModel.isCalibrated) {
+                            Text(
+                                "⚠ Not calibrated",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Color(0xFFFFCC80)
+                            )
+                        }
+                    }
+
+                    // QR scan / cancel
+                    val scanColor = if (viewModel.isScanning) Color(0xFFFF5252)
+                                    else if (!viewModel.isCalibrated) Color(0xFFFFCC80)
+                                    else Color(0xFF64FFDA)
+                    OutlinedIconButton(
+                        onClick = { viewModel.toggleScanning() },
+                        colors  = IconButtonDefaults.outlinedIconButtonColors(contentColor = scanColor),
+                        border  = BorderStroke(1.dp, scanColor.copy(alpha = 0.7f))
+                    ) {
+                        Icon(
+                            imageVector = if (viewModel.isScanning) Icons.Default.Close
+                                          else Icons.Default.QrCodeScanner,
+                            contentDescription = if (viewModel.isScanning) "Cancel scan"
+                                                 else "Scan QR to calibrate"
+                        )
+                    }
+
+                    // Mid-corridor centroid calibration
+                    val corridorEnabled = !viewModel.isScanning && !viewModel.isCorridorCalibrating
+                    val corridorColor   = if (corridorEnabled) Color(0xFFFFCC80)
+                                         else Color(0xFFFFCC80).copy(alpha = 0.3f)
+                    OutlinedIconButton(
+                        onClick  = { viewModel.calibrateAtCorridorCentroid() },
+                        enabled  = corridorEnabled,
+                        colors   = IconButtonDefaults.outlinedIconButtonColors(
+                            contentColor         = corridorColor,
+                            disabledContentColor = corridorColor
+                        ),
+                        border = BorderStroke(1.dp, corridorColor.copy(alpha = 0.7f))
+                    ) {
+                        Icon(Icons.Default.LinearScale, contentDescription = "Calibrate at corridor midpoint")
+                    }
+                }
             }
         }
     }
@@ -215,9 +207,7 @@ fun PathArrowsOverlay(
         modifier = Modifier
             .padding(horizontal = 16.dp)
             .fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF0D1F0D).copy(alpha = 0.92f)
-        ),
+        colors = CardDefaults.cardColors(containerColor = OverlayBackground),
         elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
@@ -280,9 +270,12 @@ private fun segmentBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Doubl
     return (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
 }
 
+/**
+ * Room picker dialog — the trigger button lives in the compact top bar in [ARUiOverlay];
+ * this composable only renders the dialog itself.
+ */
 @Composable
 fun DestinationSelector(viewModel: ARViewModel) {
-    // Local search query — reset whenever the dialog closes
     var searchQuery by remember { mutableStateOf("") }
 
     val filtered = remember(searchQuery, viewModel.allLocations) {
@@ -291,27 +284,6 @@ fun DestinationSelector(viewModel: ARViewModel) {
         else viewModel.allLocations.filter { it.name.contains(q, ignoreCase = true) }
     }
 
-    // ── Trigger button ────────────────────────────────────────────────────────
-    Card(
-        modifier = Modifier
-            .padding(horizontal = 16.dp)
-            .fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.9f)
-        )
-    ) {
-        Column(modifier = Modifier.padding(8.dp)) {
-            Text("Target Destination:", style = MaterialTheme.typography.labelMedium)
-            OutlinedButton(
-                onClick   = { viewModel.isDropdownExpanded = true },
-                modifier  = Modifier.fillMaxWidth()
-            ) {
-                Text(viewModel.selectedDestination?.name ?: "Select Room")
-            }
-        }
-    }
-
-    // ── Picker dialog ─────────────────────────────────────────────────────────
     if (viewModel.isDropdownExpanded) {
         AlertDialog(
             onDismissRequest = {
