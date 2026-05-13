@@ -55,8 +55,11 @@ private data class GistFileContent(
  */
 object NavGistSync {
 
-    private val prettyJson = Json { prettyPrint = true; ignoreUnknownKeys = true }
-    private val parseJson  = Json { ignoreUnknownKeys = true }
+    // encodeDefaults = true ensures fields like floor = "1" are always written to JSON,
+    // even though "1" is the Kotlin default value. Without this, default-value fields
+    // are silently omitted, making it impossible to distinguish "floor 1" from "no floor".
+    private val prettyJson = Json { prettyPrint = true; ignoreUnknownKeys = true; encodeDefaults = true }
+    private val parseJson  = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     private fun buildClient() = HttpClient(Android) {
         install(ContentNegotiation) {

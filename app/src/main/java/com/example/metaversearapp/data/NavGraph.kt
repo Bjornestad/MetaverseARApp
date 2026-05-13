@@ -68,6 +68,56 @@ object NavGraphPathfinder {
         )
     }
 
+    // ── Arrow interpolation ───────────────────────────────────────────────────
+
+    /** A single arrow position along an interpolated path. */
+    data class ArrowPoint(val lat: Double, val lon: Double, val bearing: Double)
+
+    /**
+     * Produces evenly-spaced arrow positions along [path] at [spacingMeters] intervals.
+     *
+     * Unlike placing one arrow at each segment midpoint, this walks the polyline as
+     * a continuous curve and emits an [ArrowPoint] every [spacingMeters] metres,
+     * carrying any remainder distance into the next segment.  The result is a
+     * uniform breadcrumb trail whose density doesn't depend on how closely the
+     * nodes were recorded.
+     *
+     * The first arrow appears at half-spacing from the first node so the user
+     * sees a direction cue immediately on path load.
+     */
+    fun interpolateArrows(
+        path: List<NavNode>,
+        spacingMeters: Double = 2.0
+    ): List<ArrowPoint> {
+        if (path.size < 2) return emptyList()
+        val arrows = mutableListOf<ArrowPoint>()
+        // Start the first arrow half a spacing ahead so it appears right away
+        var distToNext = spacingMeters * 0.5
+
+        for (i in 0 until path.size - 1) {
+            val a      = path[i]
+            val b      = path[i + 1]
+            val segLen = haversine(a.lat, a.lon, b.lat, b.lon)
+            if (segLen == 0.0) continue
+            val brng   = bearing(a.lat, a.lon, b.lat, b.lon)
+
+            while (distToNext <= segLen) {
+                val frac = distToNext / segLen
+                arrows.add(
+                    ArrowPoint(
+                        lat     = a.lat + frac * (b.lat - a.lat),
+                        lon     = a.lon + frac * (b.lon - a.lon),
+                        bearing = brng
+                    )
+                )
+                distToNext += spacingMeters
+            }
+            // Carry the leftover distance into the next segment
+            distToNext -= segLen
+        }
+        return arrows
+    }
+
     // ── A* ────────────────────────────────────────────────────────────────────
 
     /**

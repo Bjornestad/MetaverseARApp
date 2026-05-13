@@ -45,13 +45,6 @@ import com.example.metaversearapp.data.NavNode
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.AdminPanelSettings
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.engine.android.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.request.*
-import io.ktor.http.ContentType
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -122,16 +115,49 @@ fun ARScreen(
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
     val earthRef = remember { mutableStateOf<Earth?>(null) }
 
-    // --- PATH / BREADCRUMBS (destination selector flow) ---
-    var allNavNodes by remember { mutableStateOf<List<NavNode>>(emptyList()) }
-    var allNavEdges by remember { mutableStateOf<List<com.example.metaversearapp.data.NavEdge>>(emptyList()) }
-    var pathNodes   by remember { mutableStateOf<List<NavNode>>(emptyList()) }
-    var crumbAnchors by remember { mutableStateOf<List<Anchor>>(emptyList()) }
+    // --- DESTINATION PATH (room selector → A* arrows) ---
+    // destPathProgress is a local copy of the ViewModel path that shrinks as
+    // the user walks past each waypoint, advancing the visible arrow set.
+    var destPathProgress by remember { mutableStateOf<List<NavNode>>(emptyList()) }
+    var destArrowAnchors by remember { mutableStateOf<List<Anchor>>(emptyList()) }
 
-    // Load nav graph from DB once
-    LaunchedEffect(Unit) {
-        allNavNodes = db.navDao().getAllNodes()
-        allNavEdges = db.navDao().getAllEdges()
+    // Reset local progress whenever the ViewModel recomputes the path
+    LaunchedEffect(viewModel.destinationPathNodes) {
+        destPathProgress = viewModel.destinationPathNodes
+    }
+
+    // Re-trigger path computation the moment VPS locks (destination may have been
+    // chosen before tracking was available, so the first compute() returned early)
+    LaunchedEffect(viewModel.earthTrackingState, viewModel.selectedDestination) {
+        if (viewModel.earthTrackingState == TrackingState.TRACKING &&
+            viewModel.selectedDestination != null &&
+            viewModel.destinationPathNodes.isEmpty()
+        ) {
+            viewModel.computeDestinationPath()
+        }
+    }
+
+    // Build / rebuild destination arrow anchors whenever progress or earth changes
+    LaunchedEffect(destPathProgress, earthRef.value, viewModel.earthTrackingState) {
+        destArrowAnchors.forEach { it.detach() }
+        destArrowAnchors = emptyList()
+        val earth = earthRef.value ?: return@LaunchedEffect
+        if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+        val path = destPathProgress
+        if (path.size < 2) return@LaunchedEffect
+        val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
+
+        destArrowAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+            val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
+            try {
+                earth.createAnchor(
+                    pt.lat + viewModel.latOffset,
+                    pt.lon + viewModel.lonOffset,
+                    floorAlt,
+                    q[0], q[1], q[2], q[3]
+                )
+            } catch (_: Exception) { null }
+        }
     }
 
     // --- WAYPOINT PIN ANCHORS ---
@@ -159,7 +185,7 @@ fun ARScreen(
         endPinAnchor = earth.createAnchor(pin.rawLat, pin.rawLon, pin.alt, 0f, 0f, 0f, 1f)
     }
 
-    // Create one directional arrow anchor per path segment (midpoint, bearing-rotated, VPS-offset)
+    // Create evenly-spaced directional arrow anchors along the A* test path
     LaunchedEffect(viewModel.testPathNodes, earthRef.value, viewModel.earthTrackingState) {
         testCrumbAnchors.forEach { it.detach() }
         testCrumbAnchors = emptyList()
@@ -169,15 +195,12 @@ fun ARScreen(
         if (path.size < 2) return@LaunchedEffect
         val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
 
-        testCrumbAnchors = path.zipWithNext().mapNotNull { (a, b) ->
-            val midLat  = (a.lat + b.lat) / 2.0
-            val midLon  = (a.lon + b.lon) / 2.0
-            val bearing = NavGraphPathfinder.bearing(a.lat, a.lon, b.lat, b.lon)
-            val q       = NavGraphPathfinder.bearingToQuaternion(bearing)
+        testCrumbAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+            val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
             try {
                 earth.createAnchor(
-                    midLat + viewModel.latOffset,
-                    midLon + viewModel.lonOffset,
+                    pt.lat + viewModel.latOffset,
+                    pt.lon + viewModel.lonOffset,
                     floorAlt,
                     q[0], q[1], q[2], q[3]
                 )
@@ -246,18 +269,18 @@ fun ARScreen(
                         if (earth != null && earth.trackingState == TrackingState.TRACKING) {
                             val pose = earth.cameraGeospatialPose
 
-                            // Tick off passed breadcrumbs (destination selector flow)
-                            if (crumbAnchors.isNotEmpty() && pathNodes.size > 1) {
-                                val nextNode = pathNodes[1]
+                            // Advance destination path as the user walks past each node.
+                            // Once within 3 m of the NEXT node, drop the current leading
+                            // node so the first arrow disappears behind the user.
+                            if (destPathProgress.size > 1) {
+                                val nextNode = destPathProgress[1]
                                 val dist = NavGraphPathfinder.haversine(
                                     pose.latitude  - viewModel.latOffset,
                                     pose.longitude - viewModel.lonOffset,
                                     nextNode.lat, nextNode.lon
                                 )
                                 if (dist < 3.0) {
-                                    crumbAnchors.firstOrNull()?.detach()
-                                    crumbAnchors = crumbAnchors.drop(1)
-                                    pathNodes    = pathNodes.drop(1)
+                                    destPathProgress = destPathProgress.drop(1)
                                 }
                             }
 
@@ -327,6 +350,13 @@ fun ARScreen(
                             metallic = 0.0f, roughness = 0.6f, reflectance = 0.5f
                         )
                     }
+                    // Amber arrows for the room-destination path
+                    val amberDestMaterial = remember(materialLoader) {
+                        materialLoader.createColorInstance(
+                            color = SceneViewColor(1.0f, 0.7f, 0.0f, 0.95f),
+                            metallic = 0.0f, roughness = 0.6f, reflectance = 0.5f
+                        )
+                    }
 
                     // ── Destination marker (yellow) ────────────────────────────
                     roomAnchor?.let { anchor ->
@@ -380,39 +410,64 @@ fun ARScreen(
                         }
                     }
 
-                    // ── A* path arrows (cyan, one per segment, directional) ───
-                    // Each anchor sits at the segment midpoint and is pre-rotated
-                    // so its local +Z axis faces toward the next node.
-                    // Body (shaft) extends along +Z; head widens at the +Z tip.
+                    // ── A* test-path arrows (cyan) ────────────────────────────
+                    // Stepped "▶" arrowhead — four axis-aligned cubes.
+                    // 20 cm tall so they're visible when looking forward, not just
+                    // straight down.  +Z faces the next node (baked into the anchor
+                    // quaternion).
+                    //   Shaft:     Z  –0.25 →  0.15   (40 cm)
+                    //   Wide base: Z   0.15 →  0.25   (10 cm, 35 cm wide)
+                    //   Medium:    Z   0.25 →  0.35   (10 cm, 22 cm wide)
+                    //   Tip:       Z   0.35 →  0.45   (10 cm,  8 cm wide)
                     testCrumbAnchors.forEach { anchor ->
                         AnchorNode(anchor = anchor) {
-                            // Shaft — elongated along forward (+Z) direction
                             CubeNode(
-                                size   = Float3(0.08f, 0.05f, 0.40f),
-                                center = Position(0f, 0.025f, 0f),
+                                size   = Float3(0.08f, 0.20f, 0.40f),
+                                center = Position(0f, 0.10f, -0.05f),
                                 materialInstance = cyanWaypointMaterial
                             )
-                            // Arrowhead — wider, placed at the +Z tip of the shaft
                             CubeNode(
-                                size   = Float3(0.24f, 0.05f, 0.15f),
-                                center = Position(0f, 0.025f, 0.275f),
+                                size   = Float3(0.35f, 0.20f, 0.10f),
+                                center = Position(0f, 0.10f, 0.20f),
+                                materialInstance = cyanWaypointMaterial
+                            )
+                            CubeNode(
+                                size   = Float3(0.22f, 0.20f, 0.10f),
+                                center = Position(0f, 0.10f, 0.30f),
+                                materialInstance = cyanWaypointMaterial
+                            )
+                            CubeNode(
+                                size   = Float3(0.08f, 0.20f, 0.10f),
+                                center = Position(0f, 0.10f, 0.40f),
                                 materialInstance = cyanWaypointMaterial
                             )
                         }
                     }
 
-                    // ── Destination breadcrumbs (green, destination selector flow) ──
-                    crumbAnchors.forEachIndexed { index, anchor ->
+                    // ── Room-destination path arrows (amber) ─────────────────────
+                    // Same stepped "▶" shape; amber distinguishes destination-nav
+                    // from test-pin arrows (cyan).
+                    destArrowAnchors.forEach { anchor ->
                         AnchorNode(anchor = anchor) {
                             CubeNode(
-                                size   = Float3(0.12f, 0.12f, 0.12f),
-                                center = Position(0f, 1.2f, 0f),
-                                materialInstance = materialLoader.createColorInstance(
-                                    color = if (index == 0)
-                                        SceneViewColor(0.0f, 1.0f, 0.4f, 1.0f)
-                                    else
-                                        SceneViewColor(0.0f, 0.7f, 0.3f, 0.8f)
-                                )
+                                size   = Float3(0.08f, 0.20f, 0.40f),
+                                center = Position(0f, 0.10f, -0.05f),
+                                materialInstance = amberDestMaterial
+                            )
+                            CubeNode(
+                                size   = Float3(0.35f, 0.20f, 0.10f),
+                                center = Position(0f, 0.10f, 0.20f),
+                                materialInstance = amberDestMaterial
+                            )
+                            CubeNode(
+                                size   = Float3(0.22f, 0.20f, 0.10f),
+                                center = Position(0f, 0.10f, 0.30f),
+                                materialInstance = amberDestMaterial
+                            )
+                            CubeNode(
+                                size   = Float3(0.08f, 0.20f, 0.10f),
+                                center = Position(0f, 0.10f, 0.40f),
+                                materialInstance = amberDestMaterial
                             )
                         }
                     }
@@ -461,20 +516,20 @@ fun ARScreen(
                 }
             }
 
-            // Path info overlay (destination selector flow)
-            if (pathNodes.isNotEmpty() && viewModel.isCalibrated) {
-                val remaining = pathNodes.size - 1
+            // Destination path progress chip
+            if (destPathProgress.size > 1) {
+                val remaining = destPathProgress.size - 1
                 Box(modifier = Modifier.align(Alignment.TopCenter).padding(top = 80.dp)) {
                     Card(
                         modifier = Modifier.padding(horizontal = 16.dp),
                         colors   = CardDefaults.cardColors(
-                            containerColor = ComposeColor(0xFF1A3A1A).copy(alpha = 0.9f)
+                            containerColor = ComposeColor(0xFF2A1A00).copy(alpha = 0.9f)
                         )
                     ) {
                         Text(
-                            "🟢 Path: $remaining waypoints remaining",
+                            "🟡 Route: $remaining waypoints remaining",
                             modifier = Modifier.padding(10.dp),
-                            color    = ComposeColor(0xFF64FFDA),
+                            color    = ComposeColor(0xFFFFCC02),
                             style    = MaterialTheme.typography.bodySmall
                         )
                     }

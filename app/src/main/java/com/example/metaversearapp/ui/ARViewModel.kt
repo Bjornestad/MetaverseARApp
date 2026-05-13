@@ -8,6 +8,7 @@ import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
+import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
 import com.example.metaversearapp.data.toEntity
 import com.example.metaversearapp.data.QrFeature
@@ -39,6 +40,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var isDropdownExpanded by mutableStateOf(false)
     var isScanning by mutableStateOf(false)
 
+    // Corridor-calibration feedback
+    /** Briefly true while the centroid calibration coroutine is running. */
+    var isCorridorCalibrating by mutableStateOf(false)
+        private set
+
     // --- AR / Geospatial State ---
     var geospatialPose by mutableStateOf<GeospatialPose?>(null)
     var earthTrackingState by mutableStateOf(TrackingState.STOPPED)
@@ -52,7 +58,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         private set
     var altOffset by mutableDoubleStateOf(0.0)
         private set
-    var isCalibrated by mutableStateOf(true)
+    /**
+     * True only after a QR code has been successfully scanned this session.
+     * Starts false so the UI can warn the user before they rely on path accuracy.
+     */
+    var isCalibrated by mutableStateOf(false)
         private set
 
     // Accuracy Metrics
@@ -84,6 +94,14 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
 
     /** Ordered A* path between the two placed pins. Empty until the end pin is placed. */
     var testPathNodes by mutableStateOf<List<NavNode>>(emptyList())
+        private set
+
+    /**
+     * Ordered A* path from the user's current position to [selectedDestination].
+     * Recomputed each time a new destination is chosen, and again once VPS
+     * tracking locks (in case the destination was selected before lock).
+     */
+    var destinationPathNodes by mutableStateOf<List<NavNode>>(emptyList())
         private set
 
     init {
@@ -120,8 +138,12 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     }
 
     /**
-     * Downloads the latest nav graph from the GitHub Gist and replaces the local
-     * Room copy so all users automatically receive admin-recorded updates.
+     * Downloads the latest nav graph from the GitHub Gist and MERGES it into the
+     * local Room copy (upsert — no clear).  This means:
+     *  • Nodes/edges already in the Gist overwrite their local counterparts (same id).
+     *  • Locally recorded nodes that haven't been uploaded yet are preserved.
+     *  • An empty or unavailable Gist never wipes the local graph.
+     *
      * Runs silently — failures are swallowed so a missing/unconfigured Gist never
      * crashes the user-facing UI.
      */
@@ -131,12 +153,10 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 val result = NavGistSync.download()
                 result.onSuccess { export ->
                     withContext(Dispatchers.IO) {
-                        db.navDao().clearEdges()
-                        db.navDao().clearNodes()
+                        // Upsert only — never clear, so local-only nodes survive
                         export.nodes.forEach { db.navDao().insertNode(it) }
                         export.edges.forEach { db.navDao().insertEdge(it) }
                     }
-                    // No status update — the user doesn't need to see this happen
                 }
                 // Failures are silently ignored (token not set, no network, empty gist, etc.)
             } catch (_: Exception) { }
@@ -146,7 +166,51 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     fun onDestinationSelected(location: QrLocation) {
         selectedDestination = location
         isDropdownExpanded = false
+        destinationPathNodes = emptyList()   // clear stale path while new one computes
         statusText = "Targeting ${location.name}"
+        computeDestinationPath()
+    }
+
+    /**
+     * Runs A* from the user's current corrected position to [selectedDestination].
+     *
+     * End-node resolution order:
+     *  1. A DOOR node whose [NavNode.anchorQrId] matches the destination's QR ID —
+     *     this is the node recorded at the physical door, which is more accurate
+     *     than the room-centre coordinates stored in [QrLocation].
+     *  2. Fallback: the nav node nearest to [QrLocation.lat]/[QrLocation.lon].
+     *
+     * Safe to call any time — silently does nothing if VPS isn't tracking yet
+     * or there is no destination selected.
+     */
+    fun computeDestinationPath() {
+        val dest = selectedDestination ?: return
+        val pose = geospatialPose ?: return          // bail if not tracking yet
+
+        viewModelScope.launch {
+            val nodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
+            val edges = withContext(Dispatchers.IO) { db.navDao().getAllEdges() }
+            if (nodes.isEmpty()) return@launch
+
+            val corrLat   = pose.latitude  - latOffset
+            val corrLon   = pose.longitude - lonOffset
+            val startNode = NavGraphPathfinder.nearestNode(nodes, corrLat, corrLon)
+
+            // Prefer a DOOR node linked to this QR over the room-centre coordinates,
+            // since the door node was recorded at the actual physical door location.
+            val endNode = nodes.firstOrNull { it.anchorQrId == dest.qrID }
+                ?: NavGraphPathfinder.nearestNode(nodes, dest.lat, dest.lon)
+
+            if (startNode != null && endNode != null) {
+                val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
+                destinationPathNodes = path
+                if (path.isNotEmpty()) {
+                    statusText = "Route to ${dest.name}: ${path.size} waypoints"
+                } else {
+                    statusText = "No path to ${dest.name} — check nav graph coverage"
+                }
+            }
+        }
     }
 
     /**
@@ -175,6 +239,74 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     }
 
     /**
+     * Corridor centroid calibration — the user has declared they are standing
+     * in the **middle** of a group of nearby recorded nodes (e.g. | x x USER x x |).
+     *
+     * Algorithm:
+     *  1. Collect all nodes within [CENTROID_RADIUS_M] metres of the raw VPS pose.
+     *  2. If fewer than 2 nodes qualify, fall back to the 4 nearest regardless of
+     *     distance (gives a sensible result even in sparse graphs).
+     *  3. Compute the geographic centroid (average lat and average lon).
+     *  4. Snap the VPS coordinate system so that raw-VPS centroid == stored centroid.
+     *
+     * This tends to be more accurate than snapping to a single node because random
+     * VPS error is partially cancelled out across multiple reference points.
+     */
+    fun calibrateAtCorridorCentroid() {
+        val pose = geospatialPose ?: run {
+            statusText = "No VPS lock yet — wait for tracking then try again"
+            return
+        }
+        isCorridorCalibrating = true
+        viewModelScope.launch {
+            val nodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
+            if (nodes.isEmpty()) {
+                statusText = "No nav graph recorded — cannot calibrate this way"
+                isCorridorCalibrating = false
+                return@launch
+            }
+
+            val withDist = nodes.map { node ->
+                node to NavGraphPathfinder.haversine(pose.latitude, pose.longitude, node.lat, node.lon)
+            }
+
+            // Collect candidate nodes (within radius, or nearest 4 as a sparse-graph fallback)
+            val nearby = withDist.filter { (_, d) -> d <= CENTROID_RADIUS_M }
+                .ifEmpty { withDist.sortedBy { (_, d) -> d }.take(4) }
+
+            // Inverse-distance weighting (power = 2): nodes that are closer pull harder.
+            // This means a sparse or off-axis node has much less influence than a nearby one,
+            // so the centroid stays anchored to where the user actually is rather than being
+            // dragged toward a distant cluster.
+            //
+            // Edge case: if the user is standing almost exactly on a recorded node (< 0.1 m),
+            // snap straight to that node rather than dividing by near-zero.
+            val exactHit = nearby.firstOrNull { (_, d) -> d < 0.1 }
+            val (centroidLat, centroidLon) = if (exactHit != null) {
+                exactHit.first.lat to exactHit.first.lon
+            } else {
+                val totalWeight = nearby.sumOf { (_, d) -> 1.0 / (d * d) }
+                val wLat = nearby.sumOf { (n, d) -> n.lat / (d * d) } / totalWeight
+                val wLon = nearby.sumOf { (n, d) -> n.lon / (d * d) } / totalWeight
+                wLat to wLon
+            }
+
+            latOffset    = pose.latitude  - centroidLat
+            lonOffset    = pose.longitude - centroidLon
+            isCalibrated = true
+            isCorridorCalibrating = false
+
+            statusText = "Calibrated — averaged ${nearby.size} surrounding nodes"
+            computeDestinationPath()
+        }
+    }
+
+    companion object {
+        /** Nodes within this radius (metres) are included in the corridor centroid. */
+        private const val CENTROID_RADIUS_M = 20.0
+    }
+
+    /**
      * Cycles through the three waypoint placement steps:
      *
      * 1st tap → places the **start pin** at the current geospatial position
@@ -191,13 +323,18 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             WaypointMode.AWAIT_START -> {
                 startPin = WaypointPin(pose.latitude, pose.longitude, pose.altitude - 1.7)
                 waypointMode = WaypointMode.AWAIT_END
-                statusText = "Start pin placed — walk to the end point and tap again"
+                statusText = if (!isCalibrated)
+                    "Start pin placed — ⚠ scan a QR first for accurate arrows"
+                else
+                    "Start pin placed — walk to the end point and tap again"
             }
 
             WaypointMode.AWAIT_END -> {
                 val newEnd = WaypointPin(pose.latitude, pose.longitude, pose.altitude - 1.7)
                 endPin = newEnd
-                waypointMode = WaypointMode.PATH_READY
+                waypointMode  = WaypointMode.PATH_READY
+                testPathNodes = emptyList()   // clear previous arrows immediately while A* runs
+                statusText    = "Computing path…"
 
                 // Run A* on the background thread
                 viewModelScope.launch {
@@ -209,7 +346,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                         return@launch
                     }
 
-                    // Convert raw VPS coords to corrected coords for nearest-node lookup
+                    // Convert raw VPS coords to corrected coords for nearest-node lookup.
+                    // If the user hasn't scanned a QR code this session (latOffset == 0),
+                    // their raw VPS position may differ from the stored corrected node
+                    // coordinates by several metres — arrows will still be created but
+                    // may appear offset from the real-world path until calibration is done.
                     val correctedStartLat = startPin!!.rawLat - latOffset
                     val correctedStartLon = startPin!!.rawLon - lonOffset
                     val correctedEndLat   = newEnd.rawLat - latOffset
@@ -218,15 +359,38 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                     val startNode = NavGraphPathfinder.nearestNode(nodes, correctedStartLat, correctedStartLon)
                     val endNode   = NavGraphPathfinder.nearestNode(nodes, correctedEndLat,   correctedEndLon)
 
-                    if (startNode != null && endNode != null) {
-                        val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
-                        testPathNodes = path
-                        statusText = if (path.isNotEmpty())
-                            "Path found: ${path.size} waypoints"
-                        else
-                            "No path found between these locations"
-                    } else {
+                    if (startNode == null || endNode == null) {
                         statusText = "No nearby nav nodes — record a path here in Admin first"
+                        return@launch
+                    }
+
+                    // Warn if the nearest node is suspiciously far — this usually means
+                    // the session isn't calibrated and the coordinate spaces don't align.
+                    val startDist = NavGraphPathfinder.haversine(
+                        correctedStartLat, correctedStartLon, startNode.lat, startNode.lon)
+                    val endDist   = NavGraphPathfinder.haversine(
+                        correctedEndLat, correctedEndLon, endNode.lat, endNode.lon)
+                    val maxDist   = maxOf(startDist, endDist)
+
+                    if (maxDist > 30.0) {
+                        statusText = "⚠ Nearest node is ${maxDist.toInt()} m away — " +
+                            "scan a QR code to calibrate so arrows appear in the right place"
+                        // Still run A* so the overlay arrows show (they just may be offset)
+                    }
+
+                    if (startNode.id == endNode.id) {
+                        statusText = "Start and end map to the same nav node — " +
+                            if (!isCalibrated) "try scanning a QR code to calibrate first"
+                            else "place pins further apart or add more nodes in this area"
+                        return@launch
+                    }
+
+                    val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
+                    testPathNodes = path
+                    statusText = when {
+                        path.isEmpty() -> "No path found — graph may be disconnected here"
+                        !isCalibrated  -> "Path found (${path.size} waypoints) — scan QR for accurate arrow placement"
+                        else           -> "Path found: ${path.size} waypoints"
                     }
                 }
             }
