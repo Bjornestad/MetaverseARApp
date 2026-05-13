@@ -31,6 +31,9 @@ import kotlin.math.*
 
 @Composable
 fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
+    // Dialog lives outside the positioned columns so it can cover the full screen
+    DestinationSelector(viewModel)
+
     Box(modifier = Modifier.fillMaxSize()) {
 
         // ── TOP: status + route overview ─────────────────────────────────────
