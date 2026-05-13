@@ -1,5 +1,6 @@
 package com.example.metaversearapp.ui.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -9,9 +10,15 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.QrLocation
 import com.example.metaversearapp.ui.ARViewModel
 import com.google.ar.core.GeospatialPose
@@ -153,4 +160,199 @@ fun GeospatialBottomOverlay(viewModel: ARViewModel) {
             }
         }
     }
+}
+
+/**
+ * Battlefield-style HUD compass strip.
+ *
+ * A full-width horizontal bar showing ±60° of the compass around the current
+ * [heading].  Ticks and cardinal/intercardinal labels scroll with the heading.
+ * A fixed teal ▼ notch at the top-centre marks where the device is pointing.
+ *
+ * If [destinationBearing] is supplied:
+ *  • When the destination is within the visible span, an amber ▼ appears at
+ *    its bearing position on the bar.
+ *  • When it is off-screen left/right, a small amber ◄/► arrow appears at
+ *    the corresponding edge so the user knows which way to turn.
+ */
+@Composable
+fun HUDCompass(
+    heading: Double,
+    destinationBearing: Double?,
+    nextWaypointBearing: Double? = null,
+    modifier: Modifier = Modifier
+) {
+    val textMeasurer = rememberTextMeasurer()
+    val spanDeg  = 120f
+    val teal     = Color(0xFF64FFDA)
+    val amber    = Color(0xFFFFCC02)
+    val halfSpan = spanDeg / 2f
+
+    Card(
+        modifier = modifier,
+        colors   = CardDefaults.cardColors(containerColor = OverlayBackground),
+        shape    = MaterialTheme.shapes.small
+    ) {
+        Canvas(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .padding(horizontal = 4.dp)
+        ) {
+            val w  = size.width
+            val h  = size.height
+            val cx = w / 2f
+
+            // ── Tick marks + cardinal labels ─────────────────────────────────
+            val startDeg = (heading - halfSpan).toInt() - 1
+            val endDeg   = (heading + halfSpan).toInt() + 1
+
+            for (rawDeg in startDeg..endDeg) {
+                if (rawDeg % 5 != 0) continue
+
+                val diff = compassRelDeg(rawDeg.toFloat() - heading.toFloat())
+                if (abs(diff) > halfSpan + 1f) continue
+                val x = cx + (diff / halfSpan) * cx
+
+                val normDeg         = ((rawDeg % 360) + 360) % 360
+                val isCardinal      = normDeg % 90 == 0
+                val isIntercardinal = normDeg % 45 == 0
+                val isMajor10       = normDeg % 10 == 0
+
+                val tickTop = h * 0.28f
+                val tickLen = when {
+                    isIntercardinal -> h * 0.36f
+                    isMajor10       -> h * 0.22f
+                    else            -> h * 0.13f
+                }
+                drawLine(
+                    color       = Color.White.copy(alpha = when {
+                        isIntercardinal -> 0.90f
+                        isMajor10       -> 0.55f
+                        else            -> 0.28f
+                    }),
+                    start       = Offset(x, tickTop),
+                    end         = Offset(x, tickTop + tickLen),
+                    strokeWidth = when {
+                        isCardinal      -> 2.5f
+                        isIntercardinal -> 1.8f
+                        else            -> 1.0f
+                    }
+                )
+
+                val label = when (normDeg) {
+                    0   -> "N";  45  -> "NE"; 90  -> "E";  135 -> "SE"
+                    180 -> "S";  225 -> "SW"; 270 -> "W";  315 -> "NW"
+                    else -> null
+                }
+                if (label != null) {
+                    val tm = textMeasurer.measure(
+                        label,
+                        TextStyle(
+                            fontSize   = if (isCardinal) 11.sp else 9.sp,
+                            color      = if (isCardinal) Color.White
+                                         else Color.White.copy(alpha = 0.7f),
+                            fontWeight = if (isCardinal) FontWeight.Bold
+                                         else FontWeight.Normal
+                        )
+                    )
+                    drawText(tm, topLeft = Offset(x - tm.size.width / 2f, tickTop + tickLen + 2f))
+                }
+            }
+
+            // ── Destination bearing marker ────────────────────────────────────
+            if (destinationBearing != null) {
+                val diff    = compassRelDeg(destinationBearing.toFloat() - heading.toFloat())
+                val absDiff = abs(diff)
+                val ts      = 7.dp.toPx()
+
+                when {
+                    absDiff <= halfSpan -> {
+                        // On-screen: amber ▼ at destination x
+                        val x  = cx + (diff / halfSpan) * cx
+                        val ty = 1.dp.toPx()
+                        drawPath(Path().apply {
+                            moveTo(x,             ty + ts)
+                            lineTo(x - ts * 0.55f, ty)
+                            lineTo(x + ts * 0.55f, ty)
+                            close()
+                        }, amber)
+                    }
+                    diff < 0f -> {
+                        // Off left: amber ◄ at left edge
+                        val ex = 6.dp.toPx(); val ey = h * 0.15f
+                        drawPath(Path().apply {
+                            moveTo(ex,              ey)
+                            lineTo(ex + ts * 0.9f, ey - ts * 0.6f)
+                            lineTo(ex + ts * 0.9f, ey + ts * 0.6f)
+                            close()
+                        }, amber.copy(alpha = 0.75f))
+                    }
+                    else -> {
+                        // Off right: amber ► at right edge
+                        val ex = w - 6.dp.toPx(); val ey = h * 0.15f
+                        drawPath(Path().apply {
+                            moveTo(ex,              ey)
+                            lineTo(ex - ts * 0.9f, ey - ts * 0.6f)
+                            lineTo(ex - ts * 0.9f, ey + ts * 0.6f)
+                            close()
+                        }, amber.copy(alpha = 0.75f))
+                    }
+                }
+            }
+
+            // ── Next waypoint marker (teal dot) ──────────────────────────────
+            // Sits at the same y-row as the destination marker but uses a filled
+            // circle so the two are visually distinct even when close together.
+            if (nextWaypointBearing != null) {
+                val diff    = compassRelDeg(nextWaypointBearing.toFloat() - heading.toFloat())
+                val absDiff = abs(diff)
+                val dotR    = 4.5.dp.toPx()
+                val dotY    = 13.dp.toPx()   // below the amber destination row
+
+                when {
+                    absDiff <= halfSpan -> {
+                        val x = cx + (diff / halfSpan) * cx
+                        drawCircle(color = teal, radius = dotR, center = Offset(x, dotY))
+                        // Thin vertical stem connecting dot to tick area
+                        drawLine(
+                            color       = teal.copy(alpha = 0.5f),
+                            start       = Offset(x, dotY + dotR),
+                            end         = Offset(x, h * 0.28f),
+                            strokeWidth = 1.2f
+                        )
+                    }
+                    diff < 0f -> {
+                        // Off left: small teal ◄
+                        val ex = 6.dp.toPx()
+                        drawCircle(color = teal.copy(alpha = 0.65f), radius = dotR * 0.8f,
+                            center = Offset(ex + dotR, dotY + 6.dp.toPx()))
+                    }
+                    else -> {
+                        // Off right: small teal ►
+                        val ex = w - 6.dp.toPx()
+                        drawCircle(color = teal.copy(alpha = 0.65f), radius = dotR * 0.8f,
+                            center = Offset(ex - dotR, dotY + 6.dp.toPx()))
+                    }
+                }
+            }
+
+            // ── Fixed centre notch (teal ▼, always at top-centre) ────────────
+            val ns = 8.dp.toPx()
+            drawPath(Path().apply {
+                moveTo(cx,              ns)
+                lineTo(cx - ns * 0.55f, 0f)
+                lineTo(cx + ns * 0.55f, 0f)
+                close()
+            }, teal)
+        }
+    }
+}
+
+/** Normalises a degree difference into the range −180..180. */
+private fun compassRelDeg(diff: Float): Float {
+    var d = diff % 360f
+    if (d >  180f) d -= 360f
+    if (d < -180f) d += 360f
+    return d
 }

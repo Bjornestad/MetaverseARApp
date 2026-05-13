@@ -30,7 +30,12 @@ import com.example.metaversearapp.ui.ARViewModel
 import kotlin.math.*
 
 @Composable
-fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false, remainingWaypoints: Int = 0) {
+fun ARUiOverlay(
+    viewModel           : ARViewModel,
+    showDebug           : Boolean = false,
+    remainingWaypoints  : Int     = 0,
+    nextWaypointBearing : Double? = null
+) {
     // Dialog lives outside the positioned columns so it can cover the full screen
     DestinationSelector(viewModel)
 
@@ -44,6 +49,26 @@ fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false, remainingWay
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             StatusOverlay(viewModel.statusText)
+
+            // HUD compass — shown whenever VPS is tracking
+            viewModel.geospatialPose?.let { pose ->
+                Spacer(modifier = Modifier.height(4.dp))
+                val destBearing = viewModel.selectedDestination?.let { dest ->
+                    segmentBearing(
+                        pose.latitude,  pose.longitude,
+                        dest.lat + viewModel.latOffset,
+                        dest.lon + viewModel.lonOffset
+                    )
+                }
+                HUDCompass(
+                    heading             = pose.heading,
+                    destinationBearing  = destBearing,
+                    nextWaypointBearing = nextWaypointBearing,
+                    modifier            = Modifier
+                        .padding(horizontal = 16.dp)
+                        .fillMaxWidth()
+                )
+            }
 
             // ── Debug-only controls ──────────────────────────────────────────
             if (showDebug) {
@@ -119,22 +144,6 @@ fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false, remainingWay
                     Spacer(modifier = Modifier.height(4.dp))
                     PathArrowsOverlay(pathNodes = viewModel.testPathNodes)
                 }
-            }
-        }
-
-        // ── BOTTOM-END: compass — floats above the control bar ──────────────
-        if (viewModel.selectedDestination != null && viewModel.geospatialPose != null) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 20.dp, bottom = 96.dp)   // clear the control bar height
-            ) {
-                NavigationArrow(
-                    currentPose = viewModel.geospatialPose!!,
-                    destination = viewModel.selectedDestination!!,
-                    latOffset   = viewModel.latOffset,
-                    lonOffset   = viewModel.lonOffset
-                )
             }
         }
 

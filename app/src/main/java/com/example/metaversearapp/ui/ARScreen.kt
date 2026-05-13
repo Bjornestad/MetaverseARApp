@@ -35,6 +35,7 @@ import com.google.mlkit.vision.barcode.BarcodeScanning
 import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import dev.romainguy.kotlin.math.Float3
+import kotlin.math.*
 import io.github.sceneview.ar.ARScene
 import io.github.sceneview.ar.node.AnchorNode
 import io.github.sceneview.math.Position
@@ -487,10 +488,23 @@ fun ARScreen(
             }
 
             // --- LAYER 2: UI OVERLAYS ---
+            val nextWaypointBearing: Double? = if (destPathProgress.size >= 2) {
+                viewModel.geospatialPose?.let { pose ->
+                    val next = destPathProgress[1]
+                    val dLon = Math.toRadians(next.lon + viewModel.lonOffset - pose.longitude)
+                    val lat1 = Math.toRadians(pose.latitude)
+                    val lat2 = Math.toRadians(next.lat + viewModel.latOffset)
+                    val y    = sin(dLon) * cos(lat2)
+                    val x    = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+                    (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
+                }
+            } else null
+
             ARUiOverlay(
-                viewModel          = viewModel,
-                showDebug          = showDebug,
-                remainingWaypoints = if (destPathProgress.size > 1) destPathProgress.size - 1 else 0
+                viewModel            = viewModel,
+                showDebug            = showDebug,
+                remainingWaypoints   = if (destPathProgress.size > 1) destPathProgress.size - 1 else 0,
+                nextWaypointBearing  = nextWaypointBearing
             )
 
             // Admin + debug toggle buttons
