@@ -30,7 +30,7 @@ import com.example.metaversearapp.ui.ARViewModel
 import kotlin.math.*
 
 @Composable
-fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
+fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false, remainingWaypoints: Int = 0) {
     // Dialog lives outside the positioned columns so it can cover the full screen
     DestinationSelector(viewModel)
 
@@ -45,18 +45,62 @@ fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
         ) {
             StatusOverlay(viewModel.statusText)
 
-            // 2-D path overview for the room-destination route
-            if (viewModel.destinationPathNodes.size >= 2) {
-                Spacer(modifier = Modifier.height(4.dp))
-                PathArrowsOverlay(
-                    pathNodes   = viewModel.destinationPathNodes,
-                    label       = "Route to ${viewModel.selectedDestination?.name ?: "destination"}",
-                    accentColor = Color(0xFFFFCC02)
-                )
-            }
-
             // ── Debug-only controls ──────────────────────────────────────────
             if (showDebug) {
+                // Combined route card: arrow overview + waypoints remaining
+                if (viewModel.destinationPathNodes.size >= 2) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Card(
+                        modifier = Modifier
+                            .padding(horizontal = 16.dp)
+                            .fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = OverlayBackground)
+                    ) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
+                            // Header: destination name + remaining count
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Route to ${viewModel.selectedDestination?.name ?: "destination"}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = Color(0xFFFFCC02)
+                                )
+                                if (remainingWaypoints > 0) {
+                                    Text(
+                                        "$remainingWaypoints remaining",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = Color(0xFFFFCC02).copy(alpha = 0.75f)
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(6.dp))
+                            // Arrow strip
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState()),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Icon(Icons.Default.LocationOn, contentDescription = "Start",
+                                    tint = Color(0xFF4CAF50), modifier = Modifier.size(22.dp))
+                                viewModel.destinationPathNodes.zipWithNext().forEach { (from, to) ->
+                                    val bearing = segmentBearing(from.lat, from.lon, to.lat, to.lon).toFloat()
+                                    Icon(Icons.Default.ArrowUpward, contentDescription = null,
+                                        modifier = Modifier.size(20.dp).rotate(bearing),
+                                        tint = Color(0xFFFFCC02))
+                                }
+                                Icon(Icons.Default.LocationOn, contentDescription = "End",
+                                    tint = Color(0xFFF44336), modifier = Modifier.size(22.dp))
+                            }
+                        }
+                    }
+                }
+
+                // A* test-pin waypoint button + arrow preview
                 Spacer(modifier = Modifier.height(4.dp))
                 val (buttonLabel, buttonColor) = when (viewModel.waypointMode) {
                     ARViewModel.WaypointMode.AWAIT_START -> "Set Start Point" to Color(0xFF1565C0)
@@ -78,7 +122,23 @@ fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
             }
         }
 
-        // ── BOTTOM: compass + control bar + debug overlay ────────────────────
+        // ── BOTTOM-END: compass — floats above the control bar ──────────────
+        if (viewModel.selectedDestination != null && viewModel.geospatialPose != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = 96.dp)   // clear the control bar height
+            ) {
+                NavigationArrow(
+                    currentPose = viewModel.geospatialPose!!,
+                    destination = viewModel.selectedDestination!!,
+                    latOffset   = viewModel.latOffset,
+                    lonOffset   = viewModel.lonOffset
+                )
+            }
+        }
+
+        // ── BOTTOM: control bar + debug overlay ──────────────────────────────
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -89,16 +149,6 @@ fun ARUiOverlay(viewModel: ARViewModel, showDebug: Boolean = false) {
             if (showDebug) {
                 GeospatialBottomOverlay(viewModel = viewModel)
                 Spacer(modifier = Modifier.height(4.dp))
-            }
-
-            // Navigation compass arrow
-            if (viewModel.selectedDestination != null && viewModel.geospatialPose != null) {
-                NavigationArrow(
-                    currentPose = viewModel.geospatialPose!!,
-                    destination = viewModel.selectedDestination!!,
-                    latOffset   = viewModel.latOffset,
-                    lonOffset   = viewModel.lonOffset
-                )
             }
 
             // ── Control bar ──────────────────────────────────────────────────

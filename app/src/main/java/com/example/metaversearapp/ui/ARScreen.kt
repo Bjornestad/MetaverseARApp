@@ -487,7 +487,11 @@ fun ARScreen(
             }
 
             // --- LAYER 2: UI OVERLAYS ---
-            ARUiOverlay(viewModel, showDebug = showDebug)
+            ARUiOverlay(
+                viewModel          = viewModel,
+                showDebug          = showDebug,
+                remainingWaypoints = if (destPathProgress.size > 1) destPathProgress.size - 1 else 0
+            )
 
             // Admin + debug toggle buttons
             Row(
@@ -522,25 +526,6 @@ fun ARScreen(
                 }
             }
 
-            // Destination path progress chip
-            if (destPathProgress.size > 1) {
-                val remaining = destPathProgress.size - 1
-                Box(modifier = Modifier.align(Alignment.TopCenter).padding(top = 80.dp)) {
-                    Card(
-                        modifier = Modifier.padding(horizontal = 16.dp),
-                        colors   = CardDefaults.cardColors(
-                            containerColor = ComposeColor(0xFF2A1A00).copy(alpha = 0.9f)
-                        )
-                    ) {
-                        Text(
-                            "🟡 Route: $remaining waypoints remaining",
-                            modifier = Modifier.padding(10.dp),
-                            color    = ComposeColor(0xFFFFCC02),
-                            style    = MaterialTheme.typography.bodySmall
-                        )
-                    }
-                }
-            }
         }
     } else {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {

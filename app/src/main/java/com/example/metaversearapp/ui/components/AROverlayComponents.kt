@@ -57,7 +57,7 @@ fun NavigationArrow(currentPose: GeospatialPose, destination: QrLocation, latOff
     Card(
         shape = CircleShape,
         colors = CardDefaults.cardColors(containerColor = OverlayBackground),
-        modifier = Modifier.padding(bottom = 8.dp).size(80.dp),
+        modifier = Modifier.size(72.dp),
         elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
