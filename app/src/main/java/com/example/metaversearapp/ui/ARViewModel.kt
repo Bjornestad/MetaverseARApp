@@ -45,6 +45,24 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var isCorridorCalibrating by mutableStateOf(false)
         private set
 
+    // Arrival notification
+    var showArrivalBanner by mutableStateOf(false)
+        private set
+    var arrivedAtName by mutableStateOf("")
+        private set
+
+    fun onArrived(roomName: String) {
+        arrivedAtName    = roomName
+        showArrivalBanner = true
+    }
+
+    fun dismissArrivalBanner() {
+        showArrivalBanner    = false
+        selectedDestination  = null
+        destinationPathNodes = emptyList()
+        statusText           = "Ready: Select Destination"
+    }
+
     // --- AR / Geospatial State ---
     var geospatialPose by mutableStateOf<GeospatialPose?>(null)
     var earthTrackingState by mutableStateOf(TrackingState.STOPPED)
@@ -220,17 +238,29 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         viewModelScope.launch {
             val loc = withContext(Dispatchers.IO) { db.qrDao().getById(qrId) }
             if (loc != null) {
-                latOffset = scanPose.latitude - loc.lat
-                lonOffset = scanPose.longitude - loc.lon
-                altOffset = scanPose.altitude - loc.alt
+                // Prefer the linked door node's coordinates as the calibration reference
+                // if one exists — it was physically recorded on-site and is likely more
+                // accurate than the map-derived coordinates stored in the QR JSON.
+                // Falls back to the QrLocation coords if no door node is linked.
+                val doorNode = withContext(Dispatchers.IO) {
+                    db.navDao().getAllNodes().firstOrNull { it.anchorQrId == qrId }
+                }
+                val refLat = doorNode?.lat ?: loc.lat
+                val refLon = doorNode?.lon ?: loc.lon
+                val refAlt = loc.alt   // altitude stays from QrLocation (door nodes don't store alt)
+
+                latOffset = scanPose.latitude - refLat
+                lonOffset = scanPose.longitude - refLon
+                altOffset = scanPose.altitude - refAlt
 
                 isCalibrated = true
                 isScanning = false
 
+                val sourceName = if (doorNode != null) "${loc.name} (door node)" else loc.name
                 statusText = if (scanPose.horizontalAccuracy > 1.5) {
-                    "Calibrated at ${loc.name} (Low VPS confidence)"
+                    "Calibrated at $sourceName (Low VPS confidence)"
                 } else {
-                    "Calibrated at ${loc.name}"
+                    "Calibrated at $sourceName"
                 }
             } else {
                 statusText = "Unknown QR Code: $qrId"

@@ -11,6 +11,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LinearScale
 import androidx.compose.material.icons.filled.LocationOn
@@ -19,6 +20,8 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
@@ -233,6 +236,62 @@ fun ARUiOverlay(
                         border = BorderStroke(1.dp, corridorColor.copy(alpha = 0.7f))
                     ) {
                         Icon(Icons.Default.LinearScale, contentDescription = "Calibrate at corridor midpoint")
+                    }
+                }
+            }
+        }
+
+        // ── Arrival notification ─────────────────────────────────────────────
+        if (viewModel.showArrivalBanner) {
+            // Auto-dismiss after 5 seconds
+            LaunchedEffect(Unit) {
+                delay(5_000)
+                viewModel.dismissArrivalBanner()
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 32.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = OverlayBackground),
+                    border = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.8f))
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(
+                            imageVector        = Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint               = Color(0xFF64FFDA),
+                            modifier           = Modifier.size(52.dp)
+                        )
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            "You've arrived",
+                            color      = Color.White,
+                            fontSize   = 18.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            viewModel.arrivedAtName,
+                            color    = Color(0xFF64FFDA),
+                            fontSize = 14.sp
+                        )
+                        Spacer(modifier = Modifier.height(16.dp))
+                        OutlinedButton(
+                            onClick = { viewModel.dismissArrivalBanner() },
+                            colors  = ButtonDefaults.outlinedButtonColors(
+                                contentColor = Color.White.copy(alpha = 0.6f)
+                            ),
+                            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.25f))
+                        ) {
+                            Text("Dismiss")
+                        }
                     }
                 }
             }

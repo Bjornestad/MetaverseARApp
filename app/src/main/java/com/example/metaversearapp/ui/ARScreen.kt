@@ -141,26 +141,55 @@ fun ARScreen(
         }
     }
 
-    // Build / rebuild destination arrow anchors whenever progress or earth changes
-    LaunchedEffect(destPathProgress, earthRef.value, viewModel.earthTrackingState) {
-        destArrowAnchors.forEach { it.detach() }
-        destArrowAnchors = emptyList()
-        val earth = earthRef.value ?: return@LaunchedEffect
-        if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
-        val path = destPathProgress
-        if (path.size < 2) return@LaunchedEffect
-        val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
+    // Number of nav nodes the anchor set was last built for — used to detect
+    // a full path change vs. a single-step advance.
+    var destAnchorNodeCount by remember { mutableStateOf(0) }
 
-        destArrowAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-            val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
-            try {
-                earth.createAnchor(
-                    pt.lat + viewModel.latOffset,
-                    pt.lon + viewModel.lonOffset,
-                    floorAlt,
-                    q[0], q[1], q[2], q[3]
-                )
-            } catch (_: Exception) { null }
+    // Build / rebuild destination arrow anchors whenever progress or earth changes.
+    //
+    // Full rebuild  — path length changed by more than 1 (new destination, recalculation)
+    //               or earth just started tracking.
+    // Trim-only     — path shortened by exactly 1 node (user walked past a waypoint):
+    //               detach only the first few anchors that belonged to the passed segment
+    //               so the remaining arrows stay in place without flickering.
+    LaunchedEffect(destPathProgress, earthRef.value, viewModel.earthTrackingState) {
+        val earth = earthRef.value
+        val path  = destPathProgress
+
+        val droppedOne = path.size == destAnchorNodeCount - 1 &&
+                         earth?.trackingState == TrackingState.TRACKING
+
+        if (droppedOne && destArrowAnchors.isNotEmpty()) {
+            // Trim: detach interpolated arrows that belong to the segment we just passed.
+            // interpolateArrows spaces arrows every ~1 m, so a 1-node advance drops
+            // roughly (segmentLength / 1m) anchors from the front of the list.
+            // Detach the first quarter of the current list as a safe heuristic — the
+            // remaining three-quarters are on segments still ahead of the user.
+            val trimCount = (destArrowAnchors.size / 4).coerceAtLeast(1)
+            destArrowAnchors.take(trimCount).forEach { it.detach() }
+            destArrowAnchors = destArrowAnchors.drop(trimCount)
+            destAnchorNodeCount = path.size
+        } else {
+            // Full rebuild: new destination, recalculation, or tracking just resumed.
+            destArrowAnchors.forEach { it.detach() }
+            destArrowAnchors = emptyList()
+            destAnchorNodeCount = 0
+            if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+            if (path.size < 2) return@LaunchedEffect
+            val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
+
+            destArrowAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+                val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
+                try {
+                    earth.createAnchor(
+                        pt.lat + viewModel.latOffset,
+                        pt.lon + viewModel.lonOffset,
+                        floorAlt,
+                        q[0], q[1], q[2], q[3]
+                    )
+                } catch (_: Exception) { null }
+            }
+            destAnchorNodeCount = path.size
         }
     }
 
@@ -285,6 +314,24 @@ fun ARScreen(
                                 )
                                 if (dist < 3.0) {
                                     destPathProgress = destPathProgress.drop(1)
+                                }
+                            }
+
+                            // Arrival check — fire once when the user is within 3 m of
+                            // the final destination node and the banner isn't already showing.
+                            if (!viewModel.showArrivalBanner &&
+                                destPathProgress.size == 1 &&
+                                viewModel.selectedDestination != null
+                            ) {
+                                val finalNode = destPathProgress[0]
+                                val dist = NavGraphPathfinder.haversine(
+                                    pose.latitude  - viewModel.latOffset,
+                                    pose.longitude - viewModel.lonOffset,
+                                    finalNode.lat, finalNode.lon
+                                )
+                                if (dist < 3.0) {
+                                    viewModel.onArrived(viewModel.selectedDestination!!.name)
+                                    destPathProgress = emptyList()
                                 }
                             }
 
