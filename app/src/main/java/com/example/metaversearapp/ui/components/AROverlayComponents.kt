@@ -5,6 +5,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
+import androidx.compose.material.icons.filled.GpsFixed
+import androidx.compose.material.icons.filled.GpsNotFixed
+import androidx.compose.material.icons.filled.GpsOff
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -30,19 +33,37 @@ import kotlin.math.*
 val OverlayBackground = Color(0xFF0F1923).copy(alpha = 0.88f)
 
 @Composable
-fun StatusOverlay(status: String) {
+fun StatusOverlay(status: String, trackingState: TrackingState = TrackingState.STOPPED) {
+    val (vpsIcon, vpsColor) = when (trackingState) {
+        TrackingState.TRACKING -> Icons.Default.GpsFixed    to Color(0xFF64FFDA)
+        TrackingState.PAUSED   -> Icons.Default.GpsNotFixed to Color(0xFFFFCC80)
+        else                   -> Icons.Default.GpsOff      to Color(0xFFFF5252)
+    }
     Card(
         modifier = Modifier
             .padding(horizontal = 16.dp, vertical = 4.dp)
             .fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = OverlayBackground)
     ) {
-        Text(
-            status,
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            style = MaterialTheme.typography.bodySmall,
-            color = Color.White.copy(alpha = 0.9f)
-        )
+        Row(
+            modifier          = Modifier
+                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                status,
+                modifier = Modifier.weight(1f),
+                style    = MaterialTheme.typography.bodySmall,
+                color    = Color.White.copy(alpha = 0.9f)
+            )
+            Icon(
+                imageVector        = vpsIcon,
+                contentDescription = "VPS status",
+                tint               = vpsColor,
+                modifier           = Modifier.size(16.dp)
+            )
+        }
     }
 }
 

@@ -1,0 +1,20 @@
+package com.example.metaversearapp.ui.admin
+
+internal const val ADMIN_PIN              = "1234"   // change in production
+
+/**
+ * Guards the Gist sync so it only runs once per process lifetime.
+ * Resets automatically on app restart (which is the desired behaviour —
+ * a fresh launch should always pull the latest graph).
+ * Prevents the race where returning from a recording session re-enters
+ * AdminHubScreen, fires LaunchedEffect(Unit) again, and wipes new nodes.
+ */
+internal var adminGistSyncDone            = false
+
+internal const val MIN_NODE_DISTANCE_M    = 1.5      // metres between auto-captured nodes
+internal const val CAPTURE_INTERVAL_MS    = 2_000L   // max capture rate
+internal const val STAIR_CONNECT_RADIUS_M = 20.0     // max horizontal metres to auto-link stair endpoints
+internal const val QR_LINK_RADIUS_M       = 12.0     // max metres to auto-link a DOOR node to a nearby QR room anchor
+internal const val SEGMENT_SNAP_RADIUS_M  = 5.0      // max metres to auto-bridge a new node to an existing one during recording
+
+internal val FLOOR_OPTIONS = listOf("-2", "-1", "0", "1", "2", "3", "4", "5")

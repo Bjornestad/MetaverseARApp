@@ -1,8 +1,14 @@
 package com.example.metaversearapp.ui
 
 import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Build
+import android.provider.Settings
 import android.view.Surface
 import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -36,7 +42,7 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import dev.romainguy.kotlin.math.Float3
 import kotlin.math.*
-import io.github.sceneview.ar.ARScene
+import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.ar.node.AnchorNode
 import io.github.sceneview.math.Position
 import io.github.sceneview.math.Color as SceneViewColor
@@ -49,6 +55,7 @@ import com.example.metaversearapp.data.NavNode
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.AdminPanelSettings
+import androidx.compose.material.icons.filled.LocationOff
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -88,6 +95,26 @@ fun ARScreen(
 
     LaunchedEffect(Unit) {
         if (!permissionsGranted) launcher.launch(permissions)
+    }
+
+    // --- GPS ENABLED CHECK ---
+    // VPS requires the device location provider to be active, not just the
+    // permission.  We check on entry and listen for the provider toggling
+    // so the prompt disappears the moment the user enables GPS.
+    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    var isGpsEnabled by remember {
+        mutableStateOf(locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER))
+    }
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(ctx: Context, intent: Intent) {
+                if (intent.action == LocationManager.PROVIDERS_CHANGED_ACTION) {
+                    isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                }
+            }
+        }
+        context.registerReceiver(receiver, IntentFilter(LocationManager.PROVIDERS_CHANGED_ACTION))
+        onDispose { context.unregisterReceiver(receiver) }
     }
 
     // --- SAFETY & LIFECYCLE STATE ---
@@ -275,12 +302,19 @@ fun ARScreen(
         }
     }
 
+    if (permissionsGranted && !isGpsEnabled) {
+        GpsRequiredScreen(onOpenSettings = {
+            context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+        })
+        return
+    }
+
     if (permissionsGranted) {
         Box(modifier = Modifier.fillMaxSize()) {
 
             // --- LAYER 1: AR SCENE ---
             if (canRenderAR) {
-                ARScene(
+                ARSceneView(
                     modifier = Modifier.fillMaxSize(),
                     engine = engine,
                     modelLoader = modelLoader,
@@ -554,35 +588,33 @@ fun ARScreen(
                 nextWaypointBearing  = nextWaypointBearing
             )
 
-            // Admin + debug toggle buttons
-            Row(
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(
-                        top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 2.dp,
-                        end = 8.dp
-                    ),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            // Debug + Admin buttons — bottom-right, above the control card
+            Column(
+                modifier              = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(bottom = 80.dp, end = 8.dp),
+                verticalArrangement   = Arrangement.spacedBy(0.dp),
+                horizontalAlignment   = Alignment.End
             ) {
-                // Debug toggle
+                // Admin — only visible when debug mode is on
+                if (showDebug) {
+                    IconButton(onClick = onAdminRequest) {
+                        Icon(
+                            Icons.Default.AdminPanelSettings,
+                            contentDescription = "Admin",
+                            tint     = ComposeColor.White.copy(alpha = 0.7f),
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+                // Debug toggle — always visible
                 IconButton(onClick = { showDebug = !showDebug }) {
                     Icon(
                         Icons.Default.BugReport,
                         contentDescription = "Toggle Debug",
-                        tint = if (showDebug)
-                            ComposeColor(0xFFFFD700)   // gold when active
-                        else
-                            ComposeColor.White.copy(alpha = 0.5f),
+                        tint     = if (showDebug) ComposeColor(0xFFFFD700)
+                                   else ComposeColor.White.copy(alpha = 0.5f),
                         modifier = Modifier.size(26.dp)
-                    )
-                }
-                // Admin
-                IconButton(onClick = onAdminRequest) {
-                    Icon(
-                        Icons.Default.AdminPanelSettings,
-                        contentDescription = "Admin",
-                        tint = ComposeColor.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(28.dp)
                     )
                 }
             }
@@ -595,6 +627,52 @@ fun ARScreen(
                 Spacer(modifier = Modifier.height(8.dp))
                 Button(onClick = { launcher.launch(permissions) }) {
                     Text("Grant Permissions")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GpsRequiredScreen(onOpenSettings: () -> Unit) {
+    Box(
+        modifier         = Modifier.fillMaxSize().background(ComposeColor(0xFF121212)),
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier.padding(32.dp).fillMaxWidth(),
+            shape    = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+            colors   = CardDefaults.cardColors(containerColor = ComposeColor(0xFF1E1E1E))
+        ) {
+            Column(
+                modifier            = Modifier.padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Icon(
+                    imageVector        = Icons.Default.LocationOff,
+                    contentDescription = null,
+                    tint               = ComposeColor(0xFFFF5252),
+                    modifier           = Modifier.size(48.dp)
+                )
+                Text(
+                    "GPS Required",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = ComposeColor.White
+                )
+                Text(
+                    "This app uses Visual Positioning (VPS) to navigate indoors. " +
+                    "Please enable GPS / device location and return to the app.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = ComposeColor.White.copy(alpha = 0.7f),
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                )
+                Button(
+                    onClick  = onOpenSettings,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors   = ButtonDefaults.buttonColors(containerColor = ComposeColor(0xFF64FFDA))
+                ) {
+                    Text("Open Location Settings", color = ComposeColor.Black)
                 }
             }
         }

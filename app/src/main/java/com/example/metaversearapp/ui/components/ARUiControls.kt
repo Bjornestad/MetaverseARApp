@@ -51,7 +51,7 @@ fun ARUiOverlay(
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            StatusOverlay(viewModel.statusText)
+            StatusOverlay(viewModel.statusText, viewModel.earthTrackingState)
 
             // HUD compass — shown whenever VPS is tracking
             viewModel.geospatialPose?.let { pose ->

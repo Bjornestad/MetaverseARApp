@@ -4,6 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.room.Room
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.MIGRATION_3_4
@@ -23,7 +24,7 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             MetaverseARappTheme {
-                var isAdminMode by remember { mutableStateOf(false) }
+                var isAdminMode by rememberSaveable { mutableStateOf(false) }
 
                 if (isAdminMode) {
                     AdminScreen(
