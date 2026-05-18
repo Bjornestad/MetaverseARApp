@@ -1,6 +1,7 @@
 package com.example.metaversearapp.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
@@ -20,12 +22,16 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.NavNode
@@ -241,6 +247,14 @@ fun ARUiOverlay(
             }
         }
 
+        // ── BOTTOM-LEFT: minimap ─────────────────────────────────────────────
+        MiniMap(
+            viewModel = viewModel,
+            modifier  = Modifier
+                .align(Alignment.BottomStart)
+                .padding(start = 12.dp, bottom = 82.dp)  // clears the control card
+        )
+
         // ── Arrival notification ─────────────────────────────────────────────
         if (viewModel.showArrivalBanner) {
             // Auto-dismiss after 5 seconds
@@ -374,6 +388,163 @@ fun PathArrowsOverlay(
                     modifier = Modifier.size(22.dp)
                 )
             }
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MINIMAP
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * A small top-down map that shows:
+ *  • nearby nav-graph nodes (blue dots) and edges (faint blue lines)
+ *  • the active destination path (amber line + destination dot)
+ *  • the user's position (white dot) with a heading cone (teal triangle)
+ *  • a north "N" label and a range legend
+ *
+ * The map is centred on the user and covers [mapRadiusM] metres in every
+ * direction.  Coordinates are projected with a simple equirectangular
+ * approximation, which is accurate to within a fraction of a percent at
+ * indoor scales (≤ 100 m).
+ *
+ * Returns early (renders nothing) when VPS is not yet tracking.
+ */
+@Composable
+fun MiniMap(
+    viewModel  : ARViewModel,
+    modifier   : Modifier = Modifier,
+    sizeDp     : Dp       = 130.dp,
+    mapRadiusM : Double   = 50.0
+) {
+    val pose = viewModel.geospatialPose ?: return   // hide until VPS locks
+
+    val userLat = pose.latitude  - viewModel.latOffset
+    val userLon = pose.longitude - viewModel.lonOffset
+    val heading = (pose.heading  + viewModel.headingOffset + 360.0) % 360.0
+
+    val nodes     = viewModel.navNodes
+    val edges     = viewModel.navEdges
+    val pathNodes = viewModel.destinationPathNodes
+
+    // Build a node-id → node lookup once per node-list change.
+    val nodeMap = remember(nodes) { nodes.associateBy { it.id } }
+
+    Card(
+        modifier = modifier.size(sizeDp),
+        shape    = RoundedCornerShape(10.dp),
+        colors   = CardDefaults.cardColors(
+            containerColor = Color(0xFF0D1117).copy(alpha = 0.88f)
+        ),
+        border   = BorderStroke(1.dp, Color(0xFF2A2A3E))
+    ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+
+            Canvas(modifier = Modifier
+                .fillMaxSize()
+                .padding(8.dp)
+            ) {
+                val w  = size.width
+                val h  = size.height
+                val cx = w / 2f
+                val cy = h / 2f
+
+                // Equirectangular projection helpers
+                val mPerDegLat = 111_111.0
+                val mPerDegLon = 111_111.0 * cos(Math.toRadians(userLat))
+
+                fun toX(lon: Double) =
+                    (cx + (lon - userLon) * mPerDegLon / mapRadiusM * cx).toFloat()
+                fun toY(lat: Double) =
+                    (cy - (lat - userLat) * mPerDegLat / mapRadiusM * cy).toFloat()
+                fun inRange(lat: Double, lon: Double): Boolean {
+                    val dx = (lon - userLon) * mPerDegLon
+                    val dy = (lat - userLat) * mPerDegLat
+                    return sqrt(dx * dx + dy * dy) <= mapRadiusM * 1.3
+                }
+
+                // ── Nav edges ───────────────────────────────────────────────
+                edges.forEach { edge ->
+                    val a = nodeMap[edge.fromId] ?: return@forEach
+                    val b = nodeMap[edge.toId]   ?: return@forEach
+                    if (!inRange(a.lat, a.lon) && !inRange(b.lat, b.lon)) return@forEach
+                    drawLine(
+                        color       = Color(0xFF38BDF8).copy(alpha = 0.18f),
+                        start       = Offset(toX(a.lon), toY(a.lat)),
+                        end         = Offset(toX(b.lon), toY(b.lat)),
+                        strokeWidth = 1.2f
+                    )
+                }
+
+                // ── Nav nodes ───────────────────────────────────────────────
+                nodes.forEach { node ->
+                    if (!inRange(node.lat, node.lon)) return@forEach
+                    drawCircle(
+                        color  = Color(0xFF38BDF8).copy(alpha = 0.45f),
+                        radius = 2.5f,
+                        center = Offset(toX(node.lon), toY(node.lat))
+                    )
+                }
+
+                // ── Destination path ─────────────────────────────────────────
+                if (pathNodes.size >= 2) {
+                    for (i in 0 until pathNodes.size - 1) {
+                        val a = pathNodes[i]
+                        val b = pathNodes[i + 1]
+                        drawLine(
+                            color       = Color(0xFFFFB300).copy(alpha = 0.85f),
+                            start       = Offset(toX(a.lon), toY(a.lat)),
+                            end         = Offset(toX(b.lon), toY(b.lat)),
+                            strokeWidth = 2.5f
+                        )
+                    }
+                    // Destination marker dot
+                    drawCircle(
+                        color  = Color(0xFFFFB300),
+                        radius = 4f,
+                        center = Offset(toX(pathNodes.last().lon), toY(pathNodes.last().lat))
+                    )
+                }
+
+                // ── Heading cone ─────────────────────────────────────────────
+                // Triangle drawn pointing up (North), then rotated clockwise by
+                // the corrected compass heading so it always faces the user's
+                // actual direction.
+                val coneH = 16f
+                val coneW = 9f
+                val conePath = Path().apply {
+                    moveTo(cx, cy - coneH)          // tip
+                    lineTo(cx - coneW / 2f, cy)     // base-left
+                    lineTo(cx + coneW / 2f, cy)     // base-right
+                    close()
+                }
+                rotate(degrees = heading.toFloat(), pivot = Offset(cx, cy)) {
+                    drawPath(conePath, color = Color(0xFF64FFDA).copy(alpha = 0.9f))
+                }
+
+                // ── User dot (white ring) ─────────────────────────────────────
+                drawCircle(color = Color.White,          radius = 5f,   center = Offset(cx, cy))
+                drawCircle(color = Color(0xFF0D1117),    radius = 2.5f, center = Offset(cx, cy))
+            }
+
+            // North label
+            Text(
+                "N",
+                modifier   = Modifier.align(Alignment.TopCenter).padding(top = 2.dp),
+                color      = Color.White.copy(alpha = 0.4f),
+                fontSize   = 8.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            // Range legend
+            Text(
+                "${mapRadiusM.toInt()}m",
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 4.dp, bottom = 2.dp),
+                color    = Color.White.copy(alpha = 0.3f),
+                fontSize = 8.sp
+            )
         }
     }
 }

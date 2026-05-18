@@ -151,7 +151,11 @@ fun ARScreen(
     // destPathProgress is a local copy of the ViewModel path that shrinks as
     // the user walks past each waypoint, advancing the visible arrow set.
     var destPathProgress by remember { mutableStateOf<List<NavNode>>(emptyList()) }
-    var destArrowAnchors by remember { mutableStateOf<List<Anchor>>(emptyList()) }
+    // Each entry pairs an ARCore anchor with its geographic position so individual
+    // arrows can be detached by proximity rather than bulk-wiping the whole list.
+    var destArrows by remember {
+        mutableStateOf<List<Pair<Anchor, NavGraphPathfinder.ArrowPoint>>>(emptyList())
+    }
 
     // Reset local progress whenever the ViewModel recomputes the path
     LaunchedEffect(viewModel.destinationPathNodes) {
@@ -169,58 +173,33 @@ fun ARScreen(
         }
     }
 
-    // Number of nav nodes the anchor set was last built for — used to detect
-    // a full path change vs. a single-step advance.
-    var destAnchorNodeCount by remember { mutableStateOf(0) }
-
-    // Build / rebuild destination arrow anchors whenever progress or earth changes.
-    //
-    // Full rebuild  — path length changed by more than 1 (new destination, recalculation)
-    //               or earth just started tracking.
-    // Trim-only     — path shortened by exactly 1 node (user walked past a waypoint):
-    //               detach only the first few anchors that belonged to the passed segment
-    //               so the remaining arrows stay in place without flickering.
-    LaunchedEffect(destPathProgress, earthRef.value, viewModel.earthTrackingState) {
+    // Full rebuild whenever the path changes or earth tracking resumes.
+    // Individual arrow cleanup is handled per-proximity in onSessionUpdated,
+    // so this block never needs to partially trim — it only runs on genuine
+    // path changes (new destination, recalculation, tracking restored).
+    LaunchedEffect(viewModel.destinationPathNodes, earthRef.value, viewModel.earthTrackingState) {
         val earth = earthRef.value
-        val path  = destPathProgress
+        val path  = viewModel.destinationPathNodes
 
-        val droppedOne = path.size == destAnchorNodeCount - 1 &&
-                         earth?.trackingState == TrackingState.TRACKING
+        destArrows.forEach { (anchor, _) -> anchor.detach() }
+        destArrows = emptyList()
 
-        if (droppedOne && destArrowAnchors.isNotEmpty()) {
-            // Trim: detach interpolated arrows that belong to the segment we just passed.
-            // interpolateArrows spaces arrows every ~1 m, so a 1-node advance drops
-            // roughly (segmentLength / 1m) anchors from the front of the list.
-            // Detach the first quarter of the current list as a safe heuristic — the
-            // remaining three-quarters are on segments still ahead of the user.
-            val trimCount = (destArrowAnchors.size / 4).coerceAtLeast(1)
-            destArrowAnchors.take(trimCount).forEach { it.detach() }
-            destArrowAnchors = destArrowAnchors.drop(trimCount)
-            destAnchorNodeCount = path.size
-        } else {
-            // Full rebuild: new destination, recalculation, or tracking just resumed.
-            destArrowAnchors.forEach { it.detach() }
-            destArrowAnchors = emptyList()
-            destAnchorNodeCount = 0
-            if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
-            if (path.size < 2) return@LaunchedEffect
+        if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+        if (path.size < 2) return@LaunchedEffect
 
-            destArrowAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-                val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
-                // pt.alt is the corrected node altitude (VPS minus offset).
-                // Adding altOffset converts back to raw VPS altitude; subtracting
-                // 1.7 m puts the anchor at floor level rather than eye level.
-                // This makes arrows on upper floors appear at the right height.
-                try {
-                    earth.createAnchor(
-                        pt.lat + viewModel.latOffset,
-                        pt.lon + viewModel.lonOffset,
-                        pt.alt + viewModel.altOffset - 1.7,
-                        q[0], q[1], q[2], q[3]
-                    )
-                } catch (_: Exception) { null }
-            }
-            destAnchorNodeCount = path.size
+        destArrows = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+            val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
+            // pt.alt is corrected altitude; adding altOffset converts back to raw
+            // VPS altitude and subtracting 1.7 m places arrows at floor level.
+            try {
+                val anchor = earth.createAnchor(
+                    pt.lat + viewModel.latOffset,
+                    pt.lon + viewModel.lonOffset,
+                    pt.alt + viewModel.altOffset - 1.7,
+                    q[0], q[1], q[2], q[3]
+                )
+                Pair(anchor, pt)
+            } catch (_: Exception) { null }
         }
     }
 
@@ -339,25 +318,37 @@ fun ARScreen(
                         if (earth != null && earth.trackingState == TrackingState.TRACKING) {
                             val pose = earth.cameraGeospatialPose
 
-                            // Advance destination path as the user walks past each node.
-                            // Once within 3 m of the NEXT node, drop the current leading
-                            // node so the first arrow disappears behind the user.
-                            //
-                            // Throttled to once per 800 ms: onSessionUpdated fires ~30 fps,
-                            // so without the gate multiple nodes drop before the LaunchedEffect
-                            // can update destAnchorNodeCount, causing a full-rebuild that
-                            // detaches ALL anchors at once (the "all arrows vanish" bug).
-                            val now = System.currentTimeMillis()
+                            val now    = System.currentTimeMillis()
+                            val userLat = pose.latitude  - viewModel.latOffset
+                            val userLon = pose.longitude - viewModel.lonOffset
+
+                            // ── Advance nav-node path for HUD bearing + arrival check ──
+                            // Throttled to once per 800 ms so we never drop more than one
+                            // node per frame and accidentally trigger a full anchor rebuild.
                             if (destPathProgress.size > 1 && (now - lastPathDropTime) > 800L) {
                                 val nextNode = destPathProgress[1]
                                 val dist = NavGraphPathfinder.haversine(
-                                    pose.latitude  - viewModel.latOffset,
-                                    pose.longitude - viewModel.lonOffset,
-                                    nextNode.lat, nextNode.lon
+                                    userLat, userLon, nextNode.lat, nextNode.lon
                                 )
                                 if (dist < 3.0) {
                                     destPathProgress = destPathProgress.drop(1)
                                     lastPathDropTime = now
+                                }
+                            }
+
+                            // ── Per-arrow proximity pruning ────────────────────────────
+                            // Detach the single nearest arrow within 2.5 m so arrows
+                            // disappear one at a time as the user walks through them.
+                            // This runs independently of node advancement so it never
+                            // triggers a full rebuild or removes more than one arrow.
+                            if (destArrows.isNotEmpty()) {
+                                val closest = destArrows.indexOfFirst { (_, pt) ->
+                                    NavGraphPathfinder.haversine(userLat, userLon, pt.lat, pt.lon) < 2.5
+                                }
+                                if (closest >= 0) {
+                                    destArrows[closest].first.detach()
+                                    destArrows = destArrows.toMutableList()
+                                        .also { it.removeAt(closest) }
                                 }
                             }
 
@@ -542,7 +533,7 @@ fun ARScreen(
                     // ── Room-destination path arrows (amber) ─────────────────────
                     // Same stepped "▶" shape; amber distinguishes destination-nav
                     // from test-pin arrows (cyan).
-                    destArrowAnchors.forEach { anchor ->
+                    destArrows.forEach { (anchor, _) ->
                         AnchorNode(anchor = anchor) {
                             CubeNode(
                                 size   = Float3(0.08f, 0.20f, 0.40f),

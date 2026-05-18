@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.metaversearapp.data.AppDatabase
+import com.example.metaversearapp.data.NavEdge
 import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
@@ -134,9 +135,25 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var destinationPathNodes by mutableStateOf<List<NavNode>>(emptyList())
         private set
 
+    // ── Nav graph snapshot exposed for the minimap ───────────────────────────
+    /** All nav nodes currently in the local Room database. Refreshed on sync. */
+    var navNodes by mutableStateOf<List<NavNode>>(emptyList())
+        private set
+    /** All nav edges currently in the local Room database. Refreshed on sync. */
+    var navEdges by mutableStateOf<List<NavEdge>>(emptyList())
+        private set
+
+    private fun loadNavData() {
+        viewModelScope.launch {
+            navNodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
+            navEdges = withContext(Dispatchers.IO) { db.navDao().getAllEdges() }
+        }
+    }
+
     init {
         syncLocations()
         syncNavGraph()
+        loadNavData()
     }
 
     private fun syncLocations() {
@@ -194,6 +211,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 }
                 // Failures are silently ignored (token not set, no network, empty gist, etc.)
             } catch (_: Exception) { }
+            loadNavData() // refresh minimap data after sync (success or failure)
         }
     }
 
