@@ -945,7 +945,7 @@ function generateFill(poly, spacingM, snapM, floor, alt) {
     }
   }
 
-  // ── Grid edges (right + down, bidirectional) ────────────────────────────
+  // ── Grid edges between fill nodes (right + down, same floor, bidirectional)
   for (let r = 0; r < latGrid.length; r++) {
     for (let c = 0; c < lonGrid.length; c++) {
       const fromId = gridId[`${r},${c}`];
@@ -965,9 +965,10 @@ function generateFill(poly, spacingM, snapM, floor, alt) {
     }
   }
 
-  // ── Bridge new nodes to nearby existing nodes ───────────────────────────
+  // ── Bridge new nodes to nearby existing nodes on the same floor ─────────
   for (const nn of newNodes) {
     for (const ex of graphData.nodes) {
+      if (String(ex.floor ?? '1') !== String(floor)) continue;
       const d = haversineM(nn.lat, nn.lon, ex.lat, ex.lon);
       if (d <= snapM) {
         newEdges.push({ fromId: nn.id, toId: ex.id, weight: d });
