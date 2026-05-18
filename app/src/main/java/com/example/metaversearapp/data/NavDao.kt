@@ -56,6 +56,10 @@ interface NavDao {
     @Query("DELETE FROM nav_nodes WHERE id = :nodeId")
     suspend fun deleteNode(nodeId: String)
 
+    /** Returns all edges that touch [nodeId] (either as from or to endpoint). */
+    @Query("SELECT * FROM nav_edges WHERE fromId = :nodeId OR toId = :nodeId")
+    suspend fun getEdgesForNode(nodeId: String): List<NavEdge>
+
     /** Removes all edges connected to [nodeId] (call before or after deleteNode). */
     @Query("DELETE FROM nav_edges WHERE fromId = :nodeId OR toId = :nodeId")
     suspend fun deleteEdgesForNode(nodeId: String)

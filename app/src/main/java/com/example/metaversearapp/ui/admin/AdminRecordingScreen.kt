@@ -223,12 +223,31 @@ internal fun AdminRecordingScreen(
                 alt        = if (qr.alt != 0.0) qr.alt else node.alt
             )
             db.navDao().updateNode(linked)
+            reweightEdgesForNode(linked)
             lastRecordedNode = linked
             statusMsg = "Door linked to '${qr.name}'"
         }
         showDoorLinkDialog = false
         pendingDoorNode    = null
         doorLinkCandidates = emptyList()
+    }
+
+    /**
+     * Recomputes the weight of every edge that touches [node], using the node's
+     * current (possibly just-snapped) coordinates and the neighbour's stored coords.
+     * Must be called after any operation that moves a node's lat/lon/alt in the DB.
+     */
+    suspend fun reweightEdgesForNode(node: NavNode) {
+        val edges = db.navDao().getEdgesForNode(node.id)
+        for (edge in edges) {
+            val neighbourId = if (edge.fromId == node.id) edge.toId else edge.fromId
+            val neighbour   = db.navDao().getNodeById(neighbourId) ?: continue
+            val newWeight   = NavGraphPathfinder.distance3d(
+                node.lat, node.lon, node.alt,
+                neighbour.lat, neighbour.lon, neighbour.alt
+            )
+            db.navDao().insertEdge(edge.copy(weight = newWeight))
+        }
     }
 
     // ── UI ─────────────────────────────────────────────────────────────────────
@@ -370,6 +389,7 @@ internal fun AdminRecordingScreen(
                                                             alt        = if (loc.alt != 0.0) loc.alt else node.alt
                                                         )
                                                         db.navDao().updateNode(anchored)
+                                                        reweightEdgesForNode(anchored)
                                                         lastRecordedNode = anchored
                                                     }
                                                     statusMsg = if (isRecording)
