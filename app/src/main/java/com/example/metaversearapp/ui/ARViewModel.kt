@@ -98,6 +98,8 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         private set
     var verticalAccuracy by mutableDoubleStateOf(0.0)
         private set
+    var headingAccuracy by mutableDoubleStateOf(0.0)
+        private set
 
     // --- Waypoint Pin State ---
 
@@ -481,6 +483,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 geospatialPose = pose
                 horizontalAccuracy = pose.horizontalAccuracy
                 verticalAccuracy = pose.verticalAccuracy
+                headingAccuracy = pose.headingAccuracy.toDouble()
             } else {
                 geospatialPose = null
             }

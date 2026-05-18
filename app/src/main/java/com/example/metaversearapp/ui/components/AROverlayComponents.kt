@@ -172,6 +172,22 @@ fun GeospatialBottomOverlay(viewModel: ARViewModel) {
                         color = Color.White.copy(alpha = 0.85f)
                     )
                 }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(
+                        "Hdg.Acc:",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        "%.1f°".format(viewModel.headingAccuracy),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = when {
+                            viewModel.headingAccuracy < 10.0 -> Color(0xFF4CAF50)
+                            viewModel.headingAccuracy < 20.0 -> Color(0xFFFFCC80)
+                            else                             -> Color(0xFFFF5252)
+                        }
+                    )
+                }
                 Text(
                     String.format(Locale.US, "Lat: %.6f  Lon: %.6f", pose.latitude, pose.longitude),
                     style = MaterialTheme.typography.labelSmall,
