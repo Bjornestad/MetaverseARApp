@@ -26,6 +26,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
 class ARViewModel(private val db: AppDatabase) : ViewModel() {
 
@@ -75,6 +78,13 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var lonOffset by mutableDoubleStateOf(0.0)
         private set
     var altOffset by mutableDoubleStateOf(0.0)
+        private set
+    /**
+     * Compass heading correction (degrees) derived from a QR door scan.
+     * Added to [GeospatialPose.heading] to get the calibrated heading.
+     * Computed as: bearing(scanPos → doorNode) − vps.heading, normalised to (−180, 180].
+     */
+    var headingOffset by mutableDoubleStateOf(0.0)
         private set
     /**
      * True only after a QR code has been successfully scanned this session.
@@ -256,6 +266,23 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 latOffset = scanPose.latitude - refLat
                 lonOffset = scanPose.longitude - refLon
                 altOffset = scanPose.altitude - refAlt
+
+                // ── Heading calibration ──────────────────────────────────────
+                // The user was facing the QR code when they scanned it, so the
+                // bearing from the scan position toward the door node is a good
+                // estimate of the true compass direction they were looking.
+                // headingOffset corrects the systematic VPS compass error for
+                // this session: correctedHeading = vps.heading + headingOffset
+                val dLon  = Math.toRadians(refLon - scanPose.longitude)
+                val lat1  = Math.toRadians(scanPose.latitude)
+                val lat2  = Math.toRadians(refLat)
+                val y     = sin(dLon) * cos(lat2)
+                val x     = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
+                val trueHeading = (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
+                // Normalise offset to (−180, 180] so we never apply a huge wrap-around
+                var rawOffset = trueHeading - scanPose.heading
+                rawOffset = ((rawOffset + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+                headingOffset = rawOffset
 
                 isCalibrated = true
                 isScanning = false

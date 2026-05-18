@@ -64,7 +64,7 @@ fun ARUiOverlay(
                     )
                 }
                 HUDCompass(
-                    heading             = pose.heading,
+                    heading             = (pose.heading + viewModel.headingOffset + 360.0) % 360.0,
                     destinationBearing  = destBearing,
                     nextWaypointBearing = nextWaypointBearing,
                     modifier            = Modifier
