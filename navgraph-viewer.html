@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NavGraph Viewer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: system-ui, sans-serif; background: #111; color: #eee; height: 100vh; display: flex; flex-direction: column; }
+
+  #toolbar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 8px 14px; background: #1a1a1a; border-bottom: 1px solid #333;
+    flex-shrink: 0;
+  }
+  #toolbar h1 { font-size: 15px; font-weight: 600; color: #7dd3fc; white-space: nowrap; }
+
+  .tb-group { display: flex; align-items: center; gap: 6px; }
+  .tb-label { font-size: 12px; color: #999; }
+
+  #fileBtn {
+    background: #2563eb; color: #fff; border: none; padding: 5px 12px;
+    border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;
+  }
+  #fileBtn:hover { background: #1d4ed8; }
+  #fileInput { display: none; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 9px; border-radius: 999px; font-size: 12px; cursor: pointer;
+    border: 2px solid transparent; user-select: none;
+    transition: opacity .15s;
+  }
+  .chip.off { opacity: .35; }
+  .chip-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+  #stats { font-size: 12px; color: #888; margin-left: auto; white-space: nowrap; }
+
+  #drop-overlay {
+    position: absolute; inset: 0; background: rgba(37,99,235,.55);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 600; color: #fff; z-index: 9999;
+    pointer-events: none; opacity: 0; transition: opacity .15s;
+  }
+  #drop-overlay.show { opacity: 1; }
+
+  #map-wrap { flex: 1; position: relative; }
+  #map { width: 100%; height: 100%; }
+
+  /* Info panel */
+  #info-panel {
+    position: absolute; top: 10px; right: 10px; z-index: 1000;
+    background: #1a1a1aee; border: 1px solid #333; border-radius: 10px;
+    padding: 14px 16px; min-width: 240px; max-width: 300px;
+    font-size: 13px; display: none;
+  }
+  #info-panel h3 { font-size: 14px; margin-bottom: 8px; color: #7dd3fc; }
+  #info-panel table { width: 100%; border-collapse: collapse; }
+  #info-panel td { padding: 2px 0; }
+  #info-panel td:first-child { color: #888; padding-right: 8px; white-space: nowrap; }
+  #info-panel td:last-child { color: #eee; word-break: break-all; }
+  #info-close { float: right; cursor: pointer; color: #666; font-size: 16px; line-height: 1; }
+  #info-close:hover { color: #eee; }
+
+  /* Legend */
+  #legend {
+    position: absolute; bottom: 30px; left: 10px; z-index: 1000;
+    background: #1a1a1aee; border: 1px solid #333; border-radius: 8px;
+    padding: 10px 12px; font-size: 12px; line-height: 1.8;
+  }
+  #legend strong { display: block; margin-bottom: 4px; color: #aaa; }
+  .leg-row { display: flex; align-items: center; gap: 6px; }
+  .leg-sym { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; border: 1px solid #fff4; }
+  .leg-sym.door { border-radius: 3px; }
+  .leg-sym.stair { clip-path: polygon(50% 0%, 100% 100%, 0% 100%); border-radius: 0; border: none; }
+  .leg-edge-good { width: 24px; height: 2px; background: #38bdf8; flex-shrink: 0; }
+  .leg-edge-bad  { width: 24px; height: 2px; background: #f87171; flex-shrink: 0; border-top: 2px dashed #f87171; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>🗺 NavGraph Viewer</h1>
+  <button id="fileBtn" onclick="document.getElementById('fileInput').click()">Load navgraph.json</button>
+  <input type="file" id="fileInput" accept=".json">
+  <div class="tb-group" id="floor-chips"></div>
+  <span id="stats">Drop a navgraph.json file to begin</span>
+</div>
+
+<div id="map-wrap">
+  <div id="drop-overlay">Drop navgraph.json here</div>
+  <div id="map"></div>
+  <div id="info-panel">
+    <span id="info-close" onclick="document.getElementById('info-panel').style.display='none'">✕</span>
+    <h3 id="info-title">Node</h3>
+    <table id="info-table"></table>
+  </div>
+  <div id="legend">
+    <strong>Legend</strong>
+    <div class="leg-row"><div class="leg-edge-good"></div> Connected edge</div>
+    <div class="leg-row"><div class="leg-edge-bad"></div> Edge between components</div>
+    <div class="leg-row"><div class="leg-sym" style="background:#38bdf8"></div> Waypoint</div>
+    <div class="leg-row"><div class="leg-sym door" style="background:#fb923c"></div> Door</div>
+    <div class="leg-row"><div class="leg-sym stair" style="background:#a78bfa"></div> Stair Top</div>
+    <div class="leg-row"><div class="leg-sym stair" style="background:#4ade80"></div> Stair Bottom</div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── Map setup ────────────────────────────────────────────────────────────────
+const map = L.map('map', { preferCanvas: true }).setView([0, 0], 2);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors', maxZoom: 22
+}).addTo(map);
+
+// ── State ────────────────────────────────────────────────────────────────────
+let graphData  = null;
+let layerGroup = L.layerGroup().addTo(map);
+let activeFloors = new Set();
+
+// Floor colours (cycles for > 5 floors)
+const FLOOR_PALETTE = ['#38bdf8','#f472b6','#34d399','#fbbf24','#a78bfa','#fb923c','#e879f9'];
+function floorColor(fl) {
+  const floors = [...activeFloors].sort();
+  const idx    = floors.indexOf(String(fl));
+  return FLOOR_PALETTE[idx % FLOOR_PALETTE.length] ?? '#38bdf8';
+}
+
+// Node type overrides (fill colour, shape hint)
+const TYPE_COLOR = {
+  DOOR:         '#fb923c',
+  STAIR_TOP:    '#a78bfa',
+  STAIR_BOTTOM: '#4ade80',
+  WAYPOINT:     null,    // use floor colour
+};
+
+// ── Graph render ─────────────────────────────────────────────────────────────
+function render() {
+  layerGroup.clearLayers();
+  if (!graphData) return;
+
+  const { nodes, edges } = graphData;
+  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+
+  // Disconnected-component analysis (union-find)
+  const parent = {};
+  nodes.forEach(n => parent[n.id] = n.id);
+  function find(x) { return parent[x] === x ? x : (parent[x] = find(parent[x])); }
+  function union(a, b) { parent[find(a)] = find(b); }
+  edges.forEach(e => union(e.fromId, e.toId));
+  const compId = id => find(id);
+
+  // Count nodes per component
+  const compSize = {};
+  nodes.forEach(n => { const c = compId(n.id); compSize[c] = (compSize[c] || 0) + 1; });
+  const mainComp = Object.entries(compSize).sort((a,b) => b[1]-a[1])[0]?.[0];
+
+  // ── Edges ────────────────────────────────────────────────────────────────
+  edges.forEach(e => {
+    const a = nodeMap[e.fromId], b = nodeMap[e.toId];
+    if (!a || !b) return;
+    if (activeFloors.size > 0 && !activeFloors.has(String(a.floor)) && !activeFloors.has(String(b.floor))) return;
+
+    const sameComp    = compId(a.id) === compId(b.id);  // always true for edges but keep for clarity
+    const crossComp   = compId(a.id) !== mainComp || compId(b.id) !== mainComp;
+    const isStairEdge = (a.type === 'STAIR_TOP'    || a.type === 'STAIR_BOTTOM' ||
+                         b.type === 'STAIR_TOP'    || b.type === 'STAIR_BOTTOM');
+
+    const color = isStairEdge ? '#c084fc' :
+                  crossComp   ? '#f87171' : '#38bdf8';
+    const dash  = crossComp && !isStairEdge ? '6 4' : null;
+    const w     = isStairEdge ? 2.5 : 1.5;
+
+    const line = L.polyline([[a.lat, a.lon],[b.lat, b.lon]], {
+      color, weight: w, opacity: .65, dashArray: dash
+    });
+    line.on('click', () => showEdgeInfo(e, a, b));
+    layerGroup.addLayer(line);
+  });
+
+  // ── Nodes ────────────────────────────────────────────────────────────────
+  nodes.forEach(n => {
+    if (activeFloors.size > 0 && !activeFloors.has(String(n.floor))) return;
+
+    const isMain  = compId(n.id) === mainComp;
+    const fill    = TYPE_COLOR[n.type] ?? floorColor(n.floor);
+    const radius  = n.type === 'DOOR' ? 7 : n.type?.startsWith('STAIR') ? 8 : 5;
+    const stroke  = isMain ? '#fff' : '#f87171';
+    const sWeight = isMain ? 1 : 2.5;
+
+    const circle = L.circleMarker([n.lat, n.lon], {
+      radius, fillColor: fill, color: stroke, weight: sWeight,
+      fillOpacity: .9, opacity: 1
+    });
+    circle.on('click', () => showNodeInfo(n, compId(n.id), compSize[compId(n.id)], isMain));
+    layerGroup.addLayer(circle);
+  });
+}
+
+// ── Info panel ───────────────────────────────────────────────────────────────
+function showNodeInfo(n, comp, size, isMain) {
+  const rows = [
+    ['Type',  n.type || 'WAYPOINT'],
+    ['Floor', n.floor ?? '—'],
+    ['Lat',   n.lat.toFixed(8)],
+    ['Lon',   n.lon.toFixed(8)],
+    ['Alt',   n.alt?.toFixed(2) ?? '—'],
+    ['QR ID', n.anchorQrId || '—'],
+    ['Component', isMain ? `Main (${size} nodes)` : `Isolated (${size} nodes)`],
+    ['ID',    `<span style="font-size:10px;color:#666">${n.id}</span>`],
+  ];
+  showPanel('Node', rows);
+}
+
+function showEdgeInfo(e, a, b) {
+  const rows = [
+    ['Weight', e.weight?.toFixed(3) ?? '—'],
+    ['From floor', a.floor ?? '—'],
+    ['To floor',   b.floor ?? '—'],
+    ['From type',  a.type || 'WAYPOINT'],
+    ['To type',    b.type || 'WAYPOINT'],
+  ];
+  showPanel('Edge', rows);
+}
+
+function showPanel(title, rows) {
+  document.getElementById('info-title').textContent = title;
+  document.getElementById('info-table').innerHTML =
+    rows.map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  document.getElementById('info-panel').style.display = 'block';
+}
+
+// ── Floor chips ──────────────────────────────────────────────────────────────
+function buildFloorChips(floors) {
+  const wrap = document.getElementById('floor-chips');
+  wrap.innerHTML = '';
+  if (floors.length < 2) return;
+
+  const label = document.createElement('span');
+  label.className = 'tb-label';
+  label.textContent = 'Floor:';
+  wrap.appendChild(label);
+
+  floors.sort((a,b) => {
+    const na = parseFloat(a), nb = parseFloat(b);
+    return isNaN(na) || isNaN(nb) ? a.localeCompare(b) : na - nb;
+  }).forEach(fl => {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    chip.dataset.floor = fl;
+    const dot = document.createElement('div');
+    dot.className = 'chip-dot';
+    dot.style.background = floorColor(fl);
+    chip.appendChild(dot);
+    chip.appendChild(document.createTextNode(`Floor ${fl}`));
+    chip.addEventListener('click', () => toggleFloor(fl, chip));
+    wrap.appendChild(chip);
+  });
+}
+
+function toggleFloor(fl, chip) {
+  if (activeFloors.has(fl)) {
+    activeFloors.delete(fl);
+    chip.classList.add('off');
+  } else {
+    activeFloors.add(fl);
+    chip.classList.remove('off');
+  }
+  render();
+}
+
+// ── Stats bar ────────────────────────────────────────────────────────────────
+function updateStats() {
+  if (!graphData) return;
+  const { nodes, edges } = graphData;
+
+  // component count
+  const parent = {};
+  nodes.forEach(n => parent[n.id] = n.id);
+  function find(x) { return parent[x] === x ? x : (parent[x] = find(parent[x])); }
+  edges.forEach(e => { parent[find(e.fromId)] = find(e.toId); });
+  const comps = new Set(nodes.map(n => find(n.id)));
+
+  document.getElementById('stats').textContent =
+    `${nodes.length} nodes · ${edges.length} edges · ${comps.size} component${comps.size !== 1 ? 's' : ''}`;
+}
+
+// ── Load graph ───────────────────────────────────────────────────────────────
+function loadJSON(text) {
+  try {
+    graphData = JSON.parse(text);
+  } catch {
+    alert('Could not parse JSON — make sure this is a navgraph.json file.');
+    return;
+  }
+
+  const floors = [...new Set(graphData.nodes.map(n => String(n.floor ?? '1')))];
+  activeFloors = new Set(floors);
+  buildFloorChips(floors);
+  updateStats();
+  render();
+
+  // Fit map to nodes
+  if (graphData.nodes.length > 0) {
+    const lats = graphData.nodes.map(n => n.lat);
+    const lons = graphData.nodes.map(n => n.lon);
+    map.fitBounds([
+      [Math.min(...lats) - .0001, Math.min(...lons) - .0001],
+      [Math.max(...lats) + .0001, Math.max(...lons) + .0001]
+    ]);
+  }
+}
+
+// ── File input ───────────────────────────────────────────────────────────────
+document.getElementById('fileInput').addEventListener('change', e => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => loadJSON(ev.target.result);
+  r.readAsText(f);
+  e.target.value = '';
+});
+
+// ── Drag & drop ──────────────────────────────────────────────────────────────
+const overlay = document.getElementById('drop-overlay');
+document.addEventListener('dragover', e => { e.preventDefault(); overlay.classList.add('show'); });
+document.addEventListener('dragleave', e => { if (!e.relatedTarget) overlay.classList.remove('show'); });
+document.addEventListener('drop', e => {
+  e.preventDefault();
+  overlay.classList.remove('show');
+  const f = e.dataTransfer.files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => loadJSON(ev.target.result);
+  r.readAsText(f);
+});
+</script>
+</body>
+</html>

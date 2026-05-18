@@ -144,6 +144,7 @@ fun ARScreen(
 
     var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
+    var lastPathDropTime   by remember { mutableLongStateOf(0L) }
     val earthRef = remember { mutableStateOf<Earth?>(null) }
 
     // --- DESTINATION PATH (room selector → A* arrows) ---
@@ -339,7 +340,13 @@ fun ARScreen(
                             // Advance destination path as the user walks past each node.
                             // Once within 3 m of the NEXT node, drop the current leading
                             // node so the first arrow disappears behind the user.
-                            if (destPathProgress.size > 1) {
+                            //
+                            // Throttled to once per 800 ms: onSessionUpdated fires ~30 fps,
+                            // so without the gate multiple nodes drop before the LaunchedEffect
+                            // can update destAnchorNodeCount, causing a full-rebuild that
+                            // detaches ALL anchors at once (the "all arrows vanish" bug).
+                            val now = System.currentTimeMillis()
+                            if (destPathProgress.size > 1 && (now - lastPathDropTime) > 800L) {
                                 val nextNode = destPathProgress[1]
                                 val dist = NavGraphPathfinder.haversine(
                                     pose.latitude  - viewModel.latOffset,
@@ -348,6 +355,7 @@ fun ARScreen(
                                 )
                                 if (dist < 3.0) {
                                     destPathProgress = destPathProgress.drop(1)
+                                    lastPathDropTime = now
                                 }
                             }
 
