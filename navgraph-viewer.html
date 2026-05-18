@@ -273,7 +273,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
     <table id="info-table"></table>
   </div>
 
-  <!-- Fill panel (shown after drawing fill rectangle) -->
+  <!-- Fill panel (shown after closing fill polygon) -->
   <div id="fill-panel">
     <div id="fill-title">🪣 Fill Nodes</div>
     <div class="fill-row">
@@ -283,6 +283,16 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
     <div class="fill-row">
       <label>Connect radius</label>
       <div class="fill-inp-wrap"><input id="fillSnap" type="number" value="6.0" min="1" max="30" step="0.5"><span class="fill-unit">m</span></div>
+    </div>
+    <div class="fill-row">
+      <label>Floor</label>
+      <div class="fill-inp-wrap">
+        <select id="fillFloor" style="width:80px;padding:3px 6px;border-radius:5px;font-size:12px;border:1px solid var(--btn-bd);background:var(--btn-bg);color:var(--btn-fg)"></select>
+      </div>
+    </div>
+    <div class="fill-row">
+      <label>Altitude</label>
+      <div class="fill-inp-wrap"><input id="fillAlt" type="number" value="0" min="-999" max="999" step="0.5"><span class="fill-unit">m</span></div>
     </div>
     <div id="fill-preview"></div>
     <div class="fill-btns">
@@ -627,7 +637,7 @@ const MODE_HINTS = {
   select: 'Click nodes to select/deselect • Select All • Delete Selected',
   box:    'Drag a rectangle to select nodes inside it',
   zone:   'Drag rectangles to mark allowed building areas • then Trim to Zones',
-  fill:   'Drag a rectangle over the area to fill with evenly-spaced nodes',
+  fill:   'Click to place polygon vertices • Double-click to close polygon and configure fill',
 };
 const MODE_LABELS = { view:'View', select:'Select', box:'Box Select', zone:'Allowed Zone', fill:'Fill Nodes' };
 
@@ -642,22 +652,26 @@ function setMode(m) {
   document.getElementById('status-hint').textContent = MODE_HINTS[m];
   document.getElementById('selAllBtn').disabled = m !== 'select';
 
-  if (m === 'box' || m === 'zone' || m === 'fill') {
+  if (m === 'box' || m === 'zone') {
     map.dragging.disable();
   } else {
     map.dragging.enable();
   }
+  if (m === 'fill') {
+    map.doubleClickZoom.disable();
+  } else {
+    map.doubleClickZoom.enable();
+  }
   if (m !== 'select') { selected.clear(); updateSelUI(); render(); }
-  if (m !== 'fill') hideFillPanel();
+  if (m !== 'fill') { hideFillPanel(); clearFillPoly(); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // RECTANGLE DRAW (box select + zone + fill)
 // ═══════════════════════════════════════════════════════════════════════════
 map.on('mousedown', e => {
-  if (mode !== 'box' && mode !== 'zone' && mode !== 'fill') return;
+  if (mode !== 'box' && mode !== 'zone') return;
   if (e.originalEvent.button !== 0) return;
-  hideFillPanel();
   isDrawing = true;
   drawStart = e.latlng;
   if (drawRect) { drawRect.remove(); drawRect = null; }
@@ -692,17 +706,20 @@ map.on('mouseup', e => {
     allowedZones.push(bounds);
     renderZones();
     setStatus(`Zone ${allowedZones.length} added — draw more or click Trim to Zones`);
-  } else if (mode === 'fill') {
-    showFillPanel(bounds);
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// FILL TOOL
+// FILL TOOL  (click-by-click polygon)
 // ═══════════════════════════════════════════════════════════════════════════
-let pendingFillBounds = null;
+let pendingFillPoly  = null;  // closed array of L.LatLng, set after polygon is closed
+let fillPolyPoints   = [];    // in-progress vertex list (L.LatLng[])
+let fillPolyLayer    = null;  // L.Polyline – open-polygon preview while drawing
+let fillPolyClose    = null;  // L.Polygon  – closed preview shown in fill panel
+let fillPolyMarkers  = [];    // L.CircleMarker[] – vertex dots
+let fillClickTimer   = null;  // debounce timer to separate click from dblclick
 
-/** Great-circle distance in metres (JS version used by fill tool). */
+/** Great-circle distance in metres. */
 function haversineM(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2-lat1)*Math.PI/180;
@@ -712,19 +729,151 @@ function haversineM(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
 }
 
-/** Estimate how many nodes a fill would produce without generating them. */
-function estimateFillCount(bounds, spacingM) {
-  const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
-  const cLat = (sw.lat + ne.lat) / 2;
-  const dLat = spacingM / 111111;
-  const dLon = spacingM / (111111 * Math.cos(cLat * Math.PI / 180));
-  const rows = Math.floor((ne.lat - sw.lat) / dLat) + 1;
-  const cols = Math.floor((ne.lng  - sw.lng) / dLon) + 1;
-  return rows * cols;
+/** Ray-casting point-in-polygon. poly is array of L.LatLng ({lat, lng}). */
+function pointInPolygon(lat, lon, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].lat, yi = poly[i].lng;
+    const xj = poly[j].lat, yj = poly[j].lng;
+    if (((yi > lon) !== (yj > lon)) &&
+        (lat < (xj - xi) * (lon - yi) / (yj - yi) + xi))
+      inside = !inside;
+  }
+  return inside;
 }
 
-function showFillPanel(bounds) {
-  pendingFillBounds = bounds;
+/** Remove all in-progress polygon visuals from the map. */
+function clearFillPoly() {
+  if (fillPolyLayer)  { fillPolyLayer.remove();  fillPolyLayer  = null; }
+  if (fillPolyClose)  { fillPolyClose.remove();  fillPolyClose  = null; }
+  fillPolyMarkers.forEach(m => m.remove());
+  fillPolyMarkers = [];
+  fillPolyPoints  = [];
+  if (fillClickTimer) { clearTimeout(fillClickTimer); fillClickTimer = null; }
+}
+
+/** Redraw the dashed polyline preview that follows the in-progress polygon. */
+function updateFillPolyPreview() {
+  if (fillPolyLayer) fillPolyLayer.remove();
+  const pts = fillPolyPoints.map(p => [p.lat, p.lng]);
+  if (pts.length >= 2) {
+    // close the loop visually
+    fillPolyLayer = L.polyline([...pts, pts[0]], {
+      color: '#a78bfa', weight: 2, opacity: .9, dashArray: '5 4'
+    }).addTo(map);
+  } else if (pts.length === 1) {
+    fillPolyLayer = L.polyline(pts, { color: '#a78bfa', weight: 2 }).addTo(map);
+  }
+}
+
+/** Add one vertex to the polygon-in-progress. */
+function addFillVertex(latlng) {
+  fillPolyPoints.push(latlng);
+  const dot = L.circleMarker([latlng.lat, latlng.lng], {
+    radius: 5, fillColor: '#a78bfa', color: '#fff', weight: 1.5,
+    fillOpacity: 1, opacity: 1
+  }).addTo(map);
+  fillPolyMarkers.push(dot);
+  updateFillPolyPreview();
+  if (fillPolyPoints.length === 1) {
+    setStatus('Fill: 1 vertex placed — keep clicking to add more, double-click to close polygon');
+  } else {
+    setStatus(`Fill: ${fillPolyPoints.length} vertices — double-click to close polygon`);
+  }
+}
+
+/** Close the polygon and open the fill configuration panel. */
+function closeFillPolygon() {
+  if (fillPolyPoints.length < 3) {
+    setStatus('Fill: need at least 3 vertices — keep clicking');
+    return;
+  }
+  // Replace open polyline with a filled polygon preview
+  if (fillPolyLayer) { fillPolyLayer.remove(); fillPolyLayer = null; }
+  const pts = fillPolyPoints.map(p => [p.lat, p.lng]);
+  fillPolyClose = L.polygon(pts, {
+    color: '#a78bfa', weight: 2, opacity: .9,
+    fillColor: '#a78bfa', fillOpacity: .1
+  }).addTo(map);
+  pendingFillPoly = [...fillPolyPoints];
+  showFillPanel();
+}
+
+// ── Click handler: add vertex (debounced so dblclick doesn't add 2 stray pts)
+map.on('click', e => {
+  if (mode !== 'fill') return;
+  if (fillClickTimer) return;           // dblclick will fire next; skip
+  fillClickTimer = setTimeout(() => {
+    fillClickTimer = null;
+    addFillVertex(e.latlng);
+  }, 220);
+});
+
+// ── Double-click: close polygon
+map.on('dblclick', e => {
+  if (mode !== 'fill') return;
+  if (fillClickTimer) { clearTimeout(fillClickTimer); fillClickTimer = null; }
+  L.DomEvent.stopPropagation(e);
+  closeFillPolygon();
+});
+
+/** Rough node-count estimate for a polygon at a given spacing. */
+function estimateFillCount(poly, spacingM) {
+  if (!poly || poly.length < 3) return 0;
+  const lats = poly.map(p => p.lat), lons = poly.map(p => p.lng);
+  const cLat  = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const dLat  = spacingM / 111111;
+  const dLon  = spacingM / (111111 * Math.cos(cLat * Math.PI / 180));
+  const rows  = Math.floor((Math.max(...lats) - Math.min(...lats)) / dLat) + 1;
+  const cols  = Math.floor((Math.max(...lons) - Math.min(...lons)) / dLon) + 1;
+  return Math.round(rows * cols * 0.7); // ~70 % inside bounding box on average
+}
+
+function showFillPanel() {
+  // ── Populate floor dropdown ──────────────────────────────────────────────
+  const sel = document.getElementById('fillFloor');
+  sel.innerHTML = '';
+  const existingFloors = graphData
+    ? [...new Set(graphData.nodes.map(n => String(n.floor ?? '1')))]
+        .sort((a, b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b))
+    : ['1'];
+  if (!existingFloors.length) existingFloors.push('1');
+  existingFloors.forEach(fl => {
+    const opt = document.createElement('option');
+    opt.value = fl; opt.textContent = 'F' + fl;
+    sel.appendChild(opt);
+  });
+  const optNew = document.createElement('option');
+  optNew.value = '__new__'; optNew.textContent = '+ New…';
+  sel.appendChild(optNew);
+
+  // ── Auto-fill altitude from the selected floor's average ────────────────
+  function autoAlt() {
+    const fl = sel.value;
+    if (fl === '__new__' || !graphData) return;
+    const flNodes = graphData.nodes.filter(n => String(n.floor ?? '1') === fl && n.alt != null);
+    if (flNodes.length) {
+      const avg = flNodes.reduce((s, n) => s + n.alt, 0) / flNodes.length;
+      document.getElementById('fillAlt').value = avg.toFixed(2);
+    }
+  }
+
+  sel.onchange = () => {
+    if (sel.value === '__new__') {
+      const val = prompt('Enter new floor number or label:');
+      if (val != null && val.trim() !== '') {
+        const opt = document.createElement('option');
+        opt.value = val.trim(); opt.textContent = 'F' + val.trim();
+        sel.insertBefore(opt, optNew);
+        sel.value = val.trim();
+      } else {
+        sel.value = existingFloors[0] || '1';
+      }
+    }
+    autoAlt();
+  };
+  autoAlt();
+
   updateFillPreview();
   document.getElementById('fill-panel').style.display = 'block';
   document.getElementById('fillSpacing').focus();
@@ -732,13 +881,13 @@ function showFillPanel(bounds) {
 
 function hideFillPanel() {
   document.getElementById('fill-panel').style.display = 'none';
-  pendingFillBounds = null;
+  pendingFillPoly = null;
 }
 
 function updateFillPreview() {
-  if (!pendingFillBounds) return;
+  if (!pendingFillPoly) return;
   const spacing = parseFloat(document.getElementById('fillSpacing').value) || 2;
-  const count   = estimateFillCount(pendingFillBounds, spacing);
+  const count   = estimateFillCount(pendingFillPoly, spacing);
   document.getElementById('fill-preview').textContent =
     count > 2000
       ? `⚠ ~${count} nodes — consider a larger spacing`
@@ -748,93 +897,75 @@ function updateFillPreview() {
 document.getElementById('fillSpacing').addEventListener('input', updateFillPreview);
 
 function cancelFill() {
+  clearFillPoly();
   hideFillPanel();
   setStatus('Fill cancelled');
 }
 
 function confirmFill() {
-  if (!pendingFillBounds || !graphData) return;
-  const spacingM = Math.max(0.5, parseFloat(document.getElementById('fillSpacing').value) || 2.0);
-  const snapM    = Math.max(1.0, parseFloat(document.getElementById('fillSnap').value)    || 6.0);
-  const bounds   = pendingFillBounds;
+  if (!pendingFillPoly || !graphData) return;
+  const spacingM  = Math.max(0.5, parseFloat(document.getElementById('fillSpacing').value) || 2.0);
+  const snapM     = Math.max(1.0, parseFloat(document.getElementById('fillSnap').value)    || 6.0);
+  const floorSel  = document.getElementById('fillFloor');
+  const floor     = (floorSel.value === '__new__') ? '1' : floorSel.value;
+  const alt       = parseFloat(document.getElementById('fillAlt').value) || 0;
+  const poly      = pendingFillPoly; // capture before clearing
+  clearFillPoly();
   hideFillPanel();
-  generateFill(bounds, spacingM, snapM);
+  generateFill(poly, spacingM, snapM, floor, alt);
   setMode('view');
 }
 
-function generateFill(bounds, spacingM, snapM) {
-  const sw   = bounds.getSouthWest();
-  const ne   = bounds.getNorthEast();
-  const cLat = (sw.lat + ne.lat) / 2;
+function generateFill(poly, spacingM, snapM, floor, alt) {
+  const lats   = poly.map(p => p.lat),  lons = poly.map(p => p.lng);
+  const minLat = Math.min(...lats),      maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons),      maxLon = Math.max(...lons);
+  const cLat   = (minLat + maxLat) / 2;
 
-  // Degrees-per-metre for this latitude
   const dLat = spacingM / 111111;
   const dLon = spacingM / (111111 * Math.cos(cLat * Math.PI / 180));
 
-  // Build grid of (lat, lon) positions
-  const lats = [], lons = [];
-  for (let lat = sw.lat; lat <= ne.lat + dLat * 0.01; lat += dLat) lats.push(lat);
-  for (let lon = sw.lng; lon <= ne.lng + dLon * 0.01; lon += dLon) lons.push(lon);
+  const latGrid = [], lonGrid = [];
+  for (let lat = minLat; lat <= maxLat + dLat * 0.01; lat += dLat) latGrid.push(lat);
+  for (let lon = minLon; lon <= maxLon + dLon * 0.01; lon += dLon) lonGrid.push(lon);
 
   const newNodes = [];
   const newEdges = [];
-  const gridId   = {};  // "r,c" -> nodeId
+  const gridId   = {};
 
-  // ── Generate nodes with interpolated altitude ────────────────────────────
-  const altLookupRadius = Math.max(snapM * 3, 20); // wider search for IDW
-  for (let r = 0; r < lats.length; r++) {
-    for (let c = 0; c < lons.length; c++) {
-      const lat = lats[r], lon = lons[c];
+  // ── Generate nodes inside the polygon ───────────────────────────────────
+  for (let r = 0; r < latGrid.length; r++) {
+    for (let c = 0; c < lonGrid.length; c++) {
+      const lat = latGrid[r], lon = lonGrid[c];
+      if (!pointInPolygon(lat, lon, poly)) continue;
 
-      // Inverse-distance weighting from nearby existing nodes
-      const nearby = graphData.nodes
-        .map(n => ({ n, d: haversineM(lat, lon, n.lat, n.lon) }))
-        .filter(x => x.d <= altLookupRadius)
-        .sort((a, b) => a.d - b.d)
-        .slice(0, 8);
-
-      let alt = 0, floor = '1';
-      if (nearby.length > 0) {
-        let sumW = 0, sumWAlt = 0;
-        const floorW = {};
-        for (const { n, d } of nearby) {
-          const w = d < 0.1 ? 1e9 : 1 / (d * d);
-          sumW += w; sumWAlt += w * (n.alt ?? 0);
-          const fl = String(n.floor ?? '1');
-          floorW[fl] = (floorW[fl] || 0) + w;
-        }
-        alt   = sumW > 0 ? sumWAlt / sumW : 0;
-        floor = Object.entries(floorW).sort((a,b) => b[1]-a[1])[0]?.[0] ?? '1';
-      }
-
-      const id = 'fill-' + Math.random().toString(36).slice(2,10) + r + 'x' + c;
+      const id = 'fill-' + Math.random().toString(36).slice(2, 10) + r + 'x' + c;
       newNodes.push({ id, lat, lon, alt, floor, type: 'WAYPOINT', anchorQrId: null, label: '' });
       gridId[`${r},${c}`] = id;
     }
   }
 
-  // ── Grid edges (right + down, bidirectional) ─────────────────────────────
-  for (let r = 0; r < lats.length; r++) {
-    for (let c = 0; c < lons.length; c++) {
+  // ── Grid edges (right + down, bidirectional) ────────────────────────────
+  for (let r = 0; r < latGrid.length; r++) {
+    for (let c = 0; c < lonGrid.length; c++) {
       const fromId = gridId[`${r},${c}`];
       if (!fromId) continue;
-
       const rightId = gridId[`${r},${c+1}`];
       if (rightId) {
-        const w = haversineM(lats[r], lons[c], lats[r], lons[c+1]);
+        const w = haversineM(latGrid[r], lonGrid[c], latGrid[r], lonGrid[c+1]);
         newEdges.push({ fromId, toId: rightId, weight: w });
         newEdges.push({ fromId: rightId, toId: fromId, weight: w });
       }
       const downId = gridId[`${r+1},${c}`];
       if (downId) {
-        const w = haversineM(lats[r], lons[c], lats[r+1], lons[c]);
+        const w = haversineM(latGrid[r], lonGrid[c], latGrid[r+1], lonGrid[c]);
         newEdges.push({ fromId, toId: downId, weight: w });
         newEdges.push({ fromId: downId, toId: fromId, weight: w });
       }
     }
   }
 
-  // ── Bridge new nodes to nearby existing nodes ────────────────────────────
+  // ── Bridge new nodes to nearby existing nodes ───────────────────────────
   for (const nn of newNodes) {
     for (const ex of graphData.nodes) {
       const d = haversineM(nn.lat, nn.lon, ex.lat, ex.lon);
@@ -845,7 +976,7 @@ function generateFill(bounds, spacingM, snapM) {
     }
   }
 
-  // ── Commit (deduplicate edges by composite key) ──────────────────────────
+  // ── Commit (deduplicate edges) ───────────────────────────────────────────
   pushUndo();
   graphData.nodes = [...graphData.nodes, ...newNodes];
   const seen = new Set(graphData.edges.map(e => `${e.fromId}|${e.toId}`));
@@ -854,9 +985,16 @@ function generateFill(bounds, spacingM, snapM) {
     if (!seen.has(k)) { seen.add(k); graphData.edges.push(e); }
   }
 
+  // ── Ensure new floor is visible in the chip bar ─────────────────────────
+  if (!activeFloors.has(String(floor))) {
+    activeFloors.add(String(floor));
+    const allFloors = [...new Set(graphData.nodes.map(n => String(n.floor ?? '1')))];
+    buildFloorChips(allFloors);
+  }
+
   render();
   updateStats();
-  setStatus(`Filled ${newNodes.length} node(s), ${newEdges.length} edge(s) added`);
+  setStatus(`Filled ${newNodes.length} node(s) on floor ${floor} at ${alt}m altitude · ${newEdges.length} edge(s) added`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
