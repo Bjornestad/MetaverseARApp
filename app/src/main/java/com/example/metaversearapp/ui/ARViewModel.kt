@@ -30,6 +30,7 @@ import kotlinx.serialization.json.Json
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 class ARViewModel(private val db: AppDatabase) : ViewModel() {
 
@@ -100,6 +101,18 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var verticalAccuracy by mutableDoubleStateOf(0.0)
         private set
     var headingAccuracy by mutableDoubleStateOf(0.0)
+        private set
+
+    // Local AR reference — established at each QR scan.
+    // Enables anchor placement using ARCore's local tracking (cm-accurate)
+    // instead of VPS, which is unreliable indoors.
+    data class LocalArReference(
+        val tx: Float, val ty: Float, val tz: Float,
+        val northX: Float, val northZ: Float,
+        val refLat: Double, val refLon: Double, val refAlt: Double
+    )
+
+    var localArRef by mutableStateOf<LocalArReference?>(null)
         private set
 
     // --- Waypoint Pin State ---
@@ -268,7 +281,12 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     /**
      * Snap the current VPS coordinate system to the QR code's ground truth.
      */
-    fun onQrScanned(qrId: String, scanPose: GeospatialPose) {
+    fun onQrScanned(
+        qrId: String,
+        scanPose: GeospatialPose,
+        camTx: Float, camTy: Float, camTz: Float,
+        camQx: Float, camQy: Float, camQz: Float, camQw: Float
+    ) {
         viewModelScope.launch {
             val loc = withContext(Dispatchers.IO) { db.qrDao().getById(qrId) }
             if (loc != null) {
@@ -303,6 +321,22 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 var rawOffset = trueHeading - scanPose.heading
                 rawOffset = ((rawOffset + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
                 headingOffset = rawOffset
+
+                // Establish local AR reference for QR-relative anchor placement.
+                // Camera forward in local AR = rotate [0,0,-1] by camera quaternion.
+                val fwX = -2f * (camQx * camQz + camQy * camQw)
+                val fwZ = -1f + 2f * (camQx * camQx + camQy * camQy)
+                val horizLen = sqrt(fwX * fwX + fwZ * fwZ)
+                val fwXn = if (horizLen > 0.01f) fwX / horizLen else 0f
+                val fwZn = if (horizLen > 0.01f) fwZ / horizLen else -1f
+                val cosH = cos(Math.toRadians(trueHeading)).toFloat()
+                val sinH = sin(Math.toRadians(trueHeading)).toFloat()
+                localArRef = LocalArReference(
+                    tx = camTx, ty = camTy, tz = camTz,
+                    northX = cosH * fwXn + sinH * fwZn,
+                    northZ = -sinH * fwXn + cosH * fwZn,
+                    refLat = refLat, refLon = refLon, refAlt = refAlt
+                )
 
                 isCalibrated = true
                 isScanning = false

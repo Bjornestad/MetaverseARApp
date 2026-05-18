@@ -35,6 +35,8 @@ import com.example.metaversearapp.ui.components.ARUiOverlay
 import com.google.ar.core.Anchor
 import com.google.ar.core.Config
 import com.google.ar.core.Earth
+import com.google.ar.core.Pose
+import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -145,7 +147,8 @@ fun ARScreen(
     var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
     var lastPathDropTime   by remember { mutableLongStateOf(0L) }
-    val earthRef = remember { mutableStateOf<Earth?>(null) }
+    val earthRef   = remember { mutableStateOf<Earth?>(null) }
+    val sessionRef = remember { mutableStateOf<Session?>(null) }
 
     // --- DESTINATION PATH (room selector → A* arrows) ---
     // destPathProgress is a local copy of the ViewModel path that shrinks as
@@ -173,33 +176,37 @@ fun ARScreen(
         }
     }
 
-    // Full rebuild whenever the path changes or earth tracking resumes.
-    // Individual arrow cleanup is handled per-proximity in onSessionUpdated,
-    // so this block never needs to partially trim — it only runs on genuine
-    // path changes (new destination, recalculation, tracking restored).
-    LaunchedEffect(viewModel.destinationPathNodes, earthRef.value, viewModel.earthTrackingState) {
-        val earth = earthRef.value
-        val path  = viewModel.destinationPathNodes
+    // Full rebuild whenever the path, tracking state, or local AR reference changes.
+    // Individual arrow cleanup is handled per-proximity in onSessionUpdated.
+    LaunchedEffect(viewModel.destinationPathNodes, earthRef.value, viewModel.earthTrackingState, viewModel.localArRef, sessionRef.value) {
+        val earth    = earthRef.value
+        val path     = viewModel.destinationPathNodes
+        val localRef = viewModel.localArRef
+        val session  = sessionRef.value
 
         destArrows.forEach { (anchor, _) -> anchor.detach() }
         destArrows = emptyList()
-
-        if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
         if (path.size < 2) return@LaunchedEffect
 
-        destArrows = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-            val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
-            // pt.alt is corrected altitude; adding altOffset converts back to raw
-            // VPS altitude and subtracting 1.7 m places arrows at floor level.
-            try {
-                val anchor = earth.createAnchor(
-                    pt.lat + viewModel.latOffset,
-                    pt.lon + viewModel.lonOffset,
-                    pt.alt + viewModel.altOffset - 1.7,
-                    q[0], q[1], q[2], q[3]
-                )
-                Pair(anchor, pt)
-            } catch (_: Exception) { null }
+        destArrows = if (localRef != null && session != null) {
+            NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+                createLocalArrowAnchor(session, localRef, pt.lat, pt.lon, pt.alt, pt.bearing)
+                    ?.let { Pair(it, pt) }
+            }
+        } else {
+            if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+            NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+                val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
+                try {
+                    val anchor = earth.createAnchor(
+                        pt.lat + viewModel.latOffset,
+                        pt.lon + viewModel.lonOffset,
+                        pt.alt + viewModel.altOffset - 1.7,
+                        q[0], q[1], q[2], q[3]
+                    )
+                    Pair(anchor, pt)
+                } catch (_: Exception) { null }
+            }
         }
     }
 
@@ -229,24 +236,32 @@ fun ARScreen(
     }
 
     // Create evenly-spaced directional arrow anchors along the A* test path
-    LaunchedEffect(viewModel.testPathNodes, earthRef.value, viewModel.earthTrackingState) {
+    LaunchedEffect(viewModel.testPathNodes, earthRef.value, viewModel.earthTrackingState, viewModel.localArRef, sessionRef.value) {
         testCrumbAnchors.forEach { it.detach() }
         testCrumbAnchors = emptyList()
-        val earth = earthRef.value ?: return@LaunchedEffect
-        if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
-        val path = viewModel.testPathNodes
+        val path     = viewModel.testPathNodes
+        val localRef = viewModel.localArRef
+        val session  = sessionRef.value
         if (path.size < 2) return@LaunchedEffect
 
-        testCrumbAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-            val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
-            try {
-                earth.createAnchor(
-                    pt.lat + viewModel.latOffset,
-                    pt.lon + viewModel.lonOffset,
-                    pt.alt + viewModel.altOffset - 1.7,
-                    q[0], q[1], q[2], q[3]
-                )
-            } catch (_: Exception) { null }
+        testCrumbAnchors = if (localRef != null && session != null) {
+            NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+                createLocalArrowAnchor(session, localRef, pt.lat, pt.lon, pt.alt, pt.bearing)
+            }
+        } else {
+            val earth = earthRef.value ?: return@LaunchedEffect
+            if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+            NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+                val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
+                try {
+                    earth.createAnchor(
+                        pt.lat + viewModel.latOffset,
+                        pt.lon + viewModel.lonOffset,
+                        pt.alt + viewModel.altOffset - 1.7,
+                        q[0], q[1], q[2], q[3]
+                    )
+                } catch (_: Exception) { null }
+            }
         }
     }
 
@@ -268,14 +283,21 @@ fun ARScreen(
         viewModel.lonOffset,
         viewModel.altOffset,
         viewModel.earthTrackingState,
-        earthRef.value
+        earthRef.value,
+        viewModel.localArRef,
+        sessionRef.value
     ) {
-        val currentEarth = earthRef.value
-        val dest = viewModel.selectedDestination
-        if (currentEarth != null && viewModel.earthTrackingState == TrackingState.TRACKING && dest != null) {
+        val dest     = viewModel.selectedDestination ?: return@LaunchedEffect
+        val localRef = viewModel.localArRef
+        val session  = sessionRef.value
+        roomAnchor?.detach()
+        roomAnchor = if (localRef != null && session != null) {
+            createLocalRoomAnchor(session, localRef, dest.lat, dest.lon, dest.alt)
+        } else {
+            val currentEarth = earthRef.value ?: return@LaunchedEffect
+            if (viewModel.earthTrackingState != TrackingState.TRACKING) return@LaunchedEffect
             val floorAlt = (viewModel.geospatialPose?.altitude ?: (dest.alt + viewModel.altOffset)) - 1.7
-            roomAnchor?.detach()
-            roomAnchor = currentEarth.createAnchor(
+            currentEarth.createAnchor(
                 dest.lat + viewModel.latOffset,
                 dest.lon + viewModel.lonOffset,
                 floorAlt,
@@ -313,6 +335,7 @@ fun ARScreen(
                     onSessionUpdated = { session, frame ->
                         val earth = session.earth
                         earthRef.value = earth
+                        sessionRef.value = session
                         viewModel.updateGeospatialState(earth)
 
                         if (earth != null && earth.trackingState == TrackingState.TRACKING) {
@@ -393,7 +416,8 @@ fun ARScreen(
                                                 .addOnSuccessListener { barcodes ->
                                                     if (barcodes.isNotEmpty()) {
                                                         val id = barcodes[0].rawValue ?: return@addOnSuccessListener
-                                                        viewModel.onQrScanned(id, pose)
+                                                        val cp = frame.camera.pose
+                                                        viewModel.onQrScanned(id, pose, cp.tx(), cp.ty(), cp.tz(), cp.qx(), cp.qy(), cp.qz(), cp.qw())
                                                     }
                                                 }
                                                 .addOnCompleteListener {
@@ -632,6 +656,45 @@ fun ARScreen(
             }
         }
     }
+}
+
+private fun createLocalArrowAnchor(
+    session: Session,
+    ref: ARViewModel.LocalArReference,
+    lat: Double, lon: Double, alt: Double, bearingDeg: Double
+): Anchor? {
+    val dNorth = (lat - ref.refLat) * 111_320.0
+    val dEast  = (lon - ref.refLon) * 111_320.0 * cos(Math.toRadians(ref.refLat))
+    val eastX  = -ref.northZ;  val eastZ = ref.northX
+    val px = ref.tx + (dNorth * ref.northX + dEast * eastX).toFloat()
+    val py = ref.ty - 1.7f + (alt - ref.refAlt).toFloat()
+    val pz = ref.tz + (dNorth * ref.northZ + dEast * eastZ).toFloat()
+    val bRad = Math.toRadians(bearingDeg)
+    val dirX = (cos(bRad) * ref.northX + sin(bRad) * eastX).toFloat()
+    val dirZ = (cos(bRad) * ref.northZ + sin(bRad) * eastZ).toFloat()
+    val phi  = atan2(dirX.toDouble(), dirZ.toDouble())
+    return try {
+        session.createAnchor(
+            Pose(floatArrayOf(px, py, pz),
+                 floatArrayOf(0f, sin(phi / 2).toFloat(), 0f, cos(phi / 2).toFloat()))
+        )
+    } catch (_: Exception) { null }
+}
+
+private fun createLocalRoomAnchor(
+    session: Session,
+    ref: ARViewModel.LocalArReference,
+    lat: Double, lon: Double, alt: Double
+): Anchor? {
+    val dNorth = (lat - ref.refLat) * 111_320.0
+    val dEast  = (lon - ref.refLon) * 111_320.0 * cos(Math.toRadians(ref.refLat))
+    val eastX  = -ref.northZ;  val eastZ = ref.northX
+    val px = ref.tx + (dNorth * ref.northX + dEast * eastX).toFloat()
+    val py = ref.ty - 1.7f + (alt - ref.refAlt).toFloat()
+    val pz = ref.tz + (dNorth * ref.northZ + dEast * eastZ).toFloat()
+    return try {
+        session.createAnchor(Pose(floatArrayOf(px, py, pz), floatArrayOf(0f, 0f, 0f, 1f)))
+    } catch (_: Exception) { null }
 }
 
 @Composable
