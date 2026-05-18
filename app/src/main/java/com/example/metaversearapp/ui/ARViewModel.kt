@@ -174,6 +174,10 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                         // Upsert only — never clear, so local-only nodes survive
                         export.nodes.forEach { db.navDao().insertNode(it) }
                         export.edges.forEach { db.navDao().insertEdge(it) }
+                        // Remove any edge whose endpoint no longer exists —
+                        // upsert never deletes rows, so edges referencing nodes
+                        // that were removed from the Gist accumulate otherwise.
+                        db.navDao().pruneOrphanEdges()
                     }
                 }
                 // Failures are silently ignored (token not set, no network, empty gist, etc.)

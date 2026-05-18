@@ -3,250 +3,915 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NavGraph Viewer</title>
+<title>NavGraph Viewer & Editor</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: system-ui, sans-serif; background: #111; color: #eee; height: 100vh; display: flex; flex-direction: column; }
+/* ── Theme variables ─────────────────────────────────────────────────────── */
+:root {
+  --bg:        #111;
+  --tb-bg:     #161616;
+  --tb-border: #2a2a2a;
+  --btn-bg:    #222;
+  --btn-bd:    #333;
+  --btn-fg:    #ccc;
+  --btn-hover-bd: #555;
+  --btn-hover-fg: #fff;
+  --title:     #7dd3fc;
+  --sep:       #333;
+  --label:     #666;
+  --stats:     #555;
+  --panel-bg:  #181818ee;
+  --panel-bd:  #2a2a2a;
+  --panel-h:   #7dd3fc;
+  --panel-key: #666;
+  --panel-val: #eee;
+  --close-fg:  #444;
+  --sb-bg:     #161616cc;
+  --sb-bd:     #222;
+  --sb-fg:     #888;
+  --leg-dot-bd:#fff3;
+  --dot-stroke:#fff;
+}
+body.light {
+  --bg:        #f0f2f5;
+  --tb-bg:     #ffffff;
+  --tb-border: #d1d5db;
+  --btn-bg:    #f9fafb;
+  --btn-bd:    #d1d5db;
+  --btn-fg:    #374151;
+  --btn-hover-bd: #9ca3af;
+  --btn-hover-fg: #111;
+  --title:     #1d4ed8;
+  --sep:       #e5e7eb;
+  --label:     #9ca3af;
+  --stats:     #9ca3af;
+  --panel-bg:  #ffffffee;
+  --panel-bd:  #d1d5db;
+  --panel-h:   #1d4ed8;
+  --panel-key: #9ca3af;
+  --panel-val: #111;
+  --close-fg:  #9ca3af;
+  --sb-bg:     #ffffffcc;
+  --sb-bd:     #e5e7eb;
+  --sb-fg:     #6b7280;
+  --leg-dot-bd:#0002;
+  --dot-stroke:#111;
+}
 
-  #toolbar {
-    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    padding: 8px 14px; background: #1a1a1a; border-bottom: 1px solid #333;
-    flex-shrink: 0;
-  }
-  #toolbar h1 { font-size: 15px; font-weight: 600; color: #7dd3fc; white-space: nowrap; }
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--btn-fg);
+       height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
-  .tb-group { display: flex; align-items: center; gap: 6px; }
-  .tb-label { font-size: 12px; color: #999; }
+/* ── Toolbar ── */
+#toolbar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 7px 12px; background: var(--tb-bg); border-bottom: 1px solid var(--tb-border);
+  flex-shrink: 0; min-height: 46px;
+}
+#toolbar h1 { font-size: 14px; font-weight: 700; color: var(--title); white-space: nowrap; margin-right: 4px; }
+.sep { width: 1px; height: 22px; background: var(--sep); flex-shrink: 0; }
 
-  #fileBtn {
-    background: #2563eb; color: #fff; border: none; padding: 5px 12px;
-    border-radius: 6px; cursor: pointer; font-size: 13px; white-space: nowrap;
-  }
-  #fileBtn:hover { background: #1d4ed8; }
-  #fileInput { display: none; }
+/* mode buttons */
+.mode-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--btn-bd);
+  background: var(--btn-bg); color: var(--btn-fg); cursor: pointer; font-size: 12px;
+  white-space: nowrap; transition: all .15s;
+}
+.mode-btn:hover { border-color: var(--btn-hover-bd); color: var(--btn-hover-fg); }
+.mode-btn.active { background: #1d4ed8; border-color: #3b82f6; color: #fff; }
+.mode-btn .icon { font-size: 14px; }
 
-  .chip {
-    display: inline-flex; align-items: center; gap: 4px;
-    padding: 3px 9px; border-radius: 999px; font-size: 12px; cursor: pointer;
-    border: 2px solid transparent; user-select: none;
-    transition: opacity .15s;
-  }
-  .chip.off { opacity: .35; }
-  .chip-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+/* action buttons */
+.act-btn {
+  display: flex; align-items: center; gap: 4px;
+  padding: 4px 10px; border-radius: 6px; border: 1px solid var(--btn-bd);
+  background: var(--btn-bg); color: var(--btn-fg); cursor: pointer; font-size: 12px;
+  white-space: nowrap; transition: all .15s;
+}
+.act-btn:hover:not(:disabled) { border-color: var(--btn-hover-bd); color: var(--btn-hover-fg); }
+.act-btn:disabled { opacity: .3; cursor: default; }
+.act-btn.danger { border-color: #f87171; color: #ef4444; }
+.act-btn.danger:hover:not(:disabled) { background: #ef4444; color: #fff; border-color: #ef4444; }
+.act-btn.safe { border-color: #4ade80; color: #16a34a; }
+.act-btn.safe:hover:not(:disabled) { background: #16a34a; color: #fff; border-color: #16a34a; }
+.act-btn.warn { border-color: #fbbf24; color: #d97706; }
+.act-btn.warn:hover:not(:disabled) { background: #d97706; color: #fff; border-color: #d97706; }
 
-  #stats { font-size: 12px; color: #888; margin-left: auto; white-space: nowrap; }
+/* theme toggle */
+#themeBtn {
+  padding: 4px 9px; border-radius: 6px; border: 1px solid var(--btn-bd);
+  background: var(--btn-bg); color: var(--btn-fg); cursor: pointer; font-size: 13px;
+  transition: all .15s; margin-left: auto;
+}
+#themeBtn:hover { border-color: var(--btn-hover-bd); }
 
-  #drop-overlay {
-    position: absolute; inset: 0; background: rgba(37,99,235,.55);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 22px; font-weight: 600; color: #fff; z-index: 9999;
-    pointer-events: none; opacity: 0; transition: opacity .15s;
-  }
-  #drop-overlay.show { opacity: 1; }
+/* floor chips */
+.tb-label { font-size: 11px; color: var(--label); white-space: nowrap; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px; border-radius: 999px; font-size: 11px; cursor: pointer;
+  border: 1.5px solid transparent; user-select: none; transition: opacity .15s;
+  color: var(--btn-fg);
+}
+.chip.off { opacity: .3; }
+.chip-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+#stats { font-size: 11px; color: var(--stats); white-space: nowrap; }
 
-  #map-wrap { flex: 1; position: relative; }
-  #map { width: 100%; height: 100%; }
+.type-btn {
+  padding: 3px 8px; border-radius: 5px; font-size: 11px; cursor: pointer;
+  border: 1px solid color-mix(in srgb, var(--tc) 60%, transparent);
+  background: color-mix(in srgb, var(--tc) 12%, transparent);
+  color: var(--tc); white-space: nowrap; transition: all .15s;
+}
+body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
+.type-btn:hover { background: color-mix(in srgb, var(--tc) 25%, transparent); }
 
-  /* Info panel */
-  #info-panel {
-    position: absolute; top: 10px; right: 10px; z-index: 1000;
-    background: #1a1a1aee; border: 1px solid #333; border-radius: 10px;
-    padding: 14px 16px; min-width: 240px; max-width: 300px;
-    font-size: 13px; display: none;
-  }
-  #info-panel h3 { font-size: 14px; margin-bottom: 8px; color: #7dd3fc; }
-  #info-panel table { width: 100%; border-collapse: collapse; }
-  #info-panel td { padding: 2px 0; }
-  #info-panel td:first-child { color: #888; padding-right: 8px; white-space: nowrap; }
-  #info-panel td:last-child { color: #eee; word-break: break-all; }
-  #info-close { float: right; cursor: pointer; color: #666; font-size: 16px; line-height: 1; }
-  #info-close:hover { color: #eee; }
+/* ── Map wrap ── */
+#map-wrap { flex: 1; position: relative; overflow: hidden; }
+#map { width: 100%; height: 100%; }
+#map.mode-select { cursor: pointer; }
+#map.mode-box    { cursor: crosshair; }
+#map.mode-zone   { cursor: crosshair; }
 
-  /* Legend */
-  #legend {
-    position: absolute; bottom: 30px; left: 10px; z-index: 1000;
-    background: #1a1a1aee; border: 1px solid #333; border-radius: 8px;
-    padding: 10px 12px; font-size: 12px; line-height: 1.8;
-  }
-  #legend strong { display: block; margin-bottom: 4px; color: #aaa; }
-  .leg-row { display: flex; align-items: center; gap: 6px; }
-  .leg-sym { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; border: 1px solid #fff4; }
-  .leg-sym.door { border-radius: 3px; }
-  .leg-sym.stair { clip-path: polygon(50% 0%, 100% 100%, 0% 100%); border-radius: 0; border: none; }
-  .leg-edge-good { width: 24px; height: 2px; background: #38bdf8; flex-shrink: 0; }
-  .leg-edge-bad  { width: 24px; height: 2px; background: #f87171; flex-shrink: 0; border-top: 2px dashed #f87171; }
+/* ── Drop overlay ── */
+#drop-overlay {
+  position: absolute; inset: 0; background: rgba(37,99,235,.55);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px; font-weight: 700; color: #fff; z-index: 9999;
+  pointer-events: none; opacity: 0; transition: opacity .15s;
+}
+#drop-overlay.show { opacity: 1; }
+
+/* ── Info panel ── */
+#info-panel {
+  position: absolute; top: 10px; right: 10px; z-index: 1000;
+  background: var(--panel-bg); border: 1px solid var(--panel-bd); border-radius: 10px;
+  padding: 12px 14px; min-width: 230px; max-width: 280px;
+  font-size: 12px; display: none; backdrop-filter: blur(6px);
+}
+#info-panel h3 { font-size: 13px; margin-bottom: 8px; color: var(--panel-h); }
+#info-panel table { width: 100%; border-collapse: collapse; }
+#info-panel td { padding: 2px 0; color: var(--panel-val); }
+#info-panel td:first-child { color: var(--panel-key); padding-right: 8px; white-space: nowrap; }
+#info-close { float: right; cursor: pointer; color: var(--close-fg); font-size: 15px; line-height: 1; }
+#info-close:hover { color: var(--btn-hover-fg); }
+
+/* ── Status bar ── */
+#statusbar {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 1000;
+  background: var(--sb-bg); backdrop-filter: blur(4px);
+  padding: 5px 14px; font-size: 12px; color: var(--sb-fg);
+  border-top: 1px solid var(--sb-bd); display: flex; align-items: center; gap: 12px;
+}
+#statusbar span { white-space: nowrap; }
+#statusbar #sel-count  { color: #d97706; font-weight: 600; }
+#statusbar #zone-count { color: #16a34a; font-weight: 600; }
+
+/* ── Legend ── */
+#legend {
+  position: absolute; bottom: 30px; left: 10px; z-index: 1000;
+  background: var(--panel-bg); border: 1px solid var(--panel-bd); border-radius: 8px;
+  padding: 10px 12px; font-size: 11px; line-height: 1.9;
+  backdrop-filter: blur(6px); color: var(--btn-fg);
+}
+#legend strong { display: block; margin-bottom: 2px; color: var(--label);
+  text-transform: uppercase; letter-spacing: .05em; font-size: 10px; }
+.leg-row { display: flex; align-items: center; gap: 7px; }
+.leg-dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--leg-dot-bd); flex-shrink: 0; }
+.leg-line { width: 22px; height: 2px; flex-shrink: 0; }
+
+/* ── Fill panel ── */
+#fill-panel {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 1100; display: none;
+  background: var(--panel-bg); border: 1px solid var(--panel-bd);
+  border-radius: 12px; padding: 16px 18px; min-width: 260px;
+  backdrop-filter: blur(8px); box-shadow: 0 8px 32px #0006;
+}
+#fill-title { font-size: 14px; font-weight: 700; color: var(--panel-h); margin-bottom: 12px; }
+.fill-row { display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 8px; font-size: 12px; color: var(--panel-key); }
+.fill-inp-wrap { display: flex; align-items: center; gap: 4px; }
+.fill-inp-wrap input {
+  width: 64px; padding: 3px 6px; border-radius: 5px; font-size: 12px;
+  border: 1px solid var(--btn-bd); background: var(--btn-bg); color: var(--btn-fg);
+  text-align: right;
+}
+.fill-unit { font-size: 11px; color: var(--label); }
+#fill-preview { font-size: 11px; color: var(--label); margin-bottom: 10px; min-height: 16px; }
+.fill-btns { display: flex; gap: 8px; }
+.fill-ok {
+  flex: 1; padding: 6px; border-radius: 6px; border: 1px solid #16a34a;
+  background: #16a34a; color: #fff; cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.fill-ok:hover { background: #15803d; }
+.fill-cancel {
+  flex: 1; padding: 6px; border-radius: 6px; border: 1px solid var(--btn-bd);
+  background: var(--btn-bg); color: var(--btn-fg); cursor: pointer; font-size: 12px;
+}
+.fill-cancel:hover { border-color: var(--btn-hover-bd); }
 </style>
 </head>
 <body>
 
 <div id="toolbar">
-  <h1>🗺 NavGraph Viewer</h1>
-  <button id="fileBtn" onclick="document.getElementById('fileInput').click()">Load navgraph.json</button>
-  <input type="file" id="fileInput" accept=".json">
-  <div class="tb-group" id="floor-chips"></div>
-  <span id="stats">Drop a navgraph.json file to begin</span>
+  <h1>🗺 NavGraph Editor</h1>
+  <div class="sep"></div>
+
+  <!-- File actions -->
+  <button class="act-btn safe" onclick="document.getElementById('fileInput').click()">📂 Load</button>
+  <input type="file" id="fileInput" accept=".json" style="display:none">
+  <button class="act-btn safe" id="exportBtn" onclick="exportJSON()" disabled>💾 Export</button>
+
+  <div class="sep"></div>
+
+  <!-- Mode buttons -->
+  <button class="mode-btn active" id="btn-view"   onclick="setMode('view')">  <span class="icon">👆</span> View</button>
+  <button class="mode-btn"        id="btn-select" onclick="setMode('select')"><span class="icon">🎯</span> Select</button>
+  <button class="mode-btn"        id="btn-box"    onclick="setMode('box')">   <span class="icon">⬚</span> Box&nbsp;Select</button>
+  <button class="mode-btn"        id="btn-zone"   onclick="setMode('zone')">  <span class="icon">🏗</span> Allowed&nbsp;Zone</button>
+  <button class="mode-btn"        id="btn-fill"   onclick="setMode('fill')">  <span class="icon">🪣</span> Fill&nbsp;Nodes</button>
+
+  <div class="sep"></div>
+
+  <!-- Quick select by type -->
+  <span class="tb-label">Quick&nbsp;select:</span>
+  <button class="type-btn" style="--tc:#0369a1" onclick="selectByType('WAYPOINT')">Waypoints</button>
+  <button class="type-btn" style="--tc:#c2410c" onclick="selectByType('DOOR')">Doors</button>
+  <button class="type-btn" style="--tc:#6d28d9" onclick="selectByType('STAIR_TOP')">Stair&nbsp;↑</button>
+  <button class="type-btn" style="--tc:#1d4ed8" onclick="selectByType('STAIR_MIDDLE')">Stair&nbsp;↕</button>
+  <button class="type-btn" style="--tc:#15803d" onclick="selectByType('STAIR_BOTTOM')">Stair&nbsp;↓</button>
+  <button class="type-btn" style="--tc:#dc2626" onclick="selectIsolated()">Isolated</button>
+
+  <div class="sep"></div>
+
+  <!-- Edit actions -->
+  <button class="act-btn danger" id="deleteSelBtn" onclick="deleteSelected()" disabled>🗑 Delete Selected (<span id="selCount">0</span>)</button>
+  <button class="act-btn warn"   id="trimZoneBtn"  onclick="trimToZones()"    disabled>✂️ Trim to Zones (<span id="zoneCount">0</span>)</button>
+  <button class="act-btn"        id="clearZoneBtn" onclick="clearZones()"     disabled>🧹 Clear Zones</button>
+  <button class="act-btn"        id="undoBtn"      onclick="undo()"           disabled>↩ Undo</button>
+  <button class="act-btn"        id="selAllBtn"    onclick="selectAll()"      disabled>☑ Select All</button>
+  <button class="act-btn"        id="deselBtn"     onclick="deselect()"       disabled>✕ Deselect</button>
+
+  <div class="sep"></div>
+  <span class="tb-label">Floor:</span>
+  <div id="floor-chips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center"></div>
+
+  <span id="stats">Load a navgraph.json to begin</span>
+  <button id="themeBtn" onclick="toggleTheme()" title="Toggle light/dark mode">🌙</button>
 </div>
 
 <div id="map-wrap">
   <div id="drop-overlay">Drop navgraph.json here</div>
   <div id="map"></div>
+
   <div id="info-panel">
     <span id="info-close" onclick="document.getElementById('info-panel').style.display='none'">✕</span>
     <h3 id="info-title">Node</h3>
     <table id="info-table"></table>
   </div>
+
+  <!-- Fill panel (shown after drawing fill rectangle) -->
+  <div id="fill-panel">
+    <div id="fill-title">🪣 Fill Nodes</div>
+    <div class="fill-row">
+      <label>Node spacing</label>
+      <div class="fill-inp-wrap"><input id="fillSpacing" type="number" value="2.0" min="0.5" max="20" step="0.5"><span class="fill-unit">m</span></div>
+    </div>
+    <div class="fill-row">
+      <label>Connect radius</label>
+      <div class="fill-inp-wrap"><input id="fillSnap" type="number" value="6.0" min="1" max="30" step="0.5"><span class="fill-unit">m</span></div>
+    </div>
+    <div id="fill-preview"></div>
+    <div class="fill-btns">
+      <button class="fill-ok"     onclick="confirmFill()">Generate</button>
+      <button class="fill-cancel" onclick="cancelFill()">Cancel</button>
+    </div>
+  </div>
+
   <div id="legend">
-    <strong>Legend</strong>
-    <div class="leg-row"><div class="leg-edge-good"></div> Connected edge</div>
-    <div class="leg-row"><div class="leg-edge-bad"></div> Edge between components</div>
-    <div class="leg-row"><div class="leg-sym" style="background:#38bdf8"></div> Waypoint</div>
-    <div class="leg-row"><div class="leg-sym door" style="background:#fb923c"></div> Door</div>
-    <div class="leg-row"><div class="leg-sym stair" style="background:#a78bfa"></div> Stair Top</div>
-    <div class="leg-row"><div class="leg-sym stair" style="background:#4ade80"></div> Stair Bottom</div>
+    <strong>Nodes</strong>
+    <div class="leg-row"><div class="leg-dot" style="background:#38bdf8"></div> Waypoint</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#fb923c;border-radius:3px"></div> Door</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#a78bfa"></div> Stair Top</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#60a5fa"></div> Stair Middle</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#4ade80"></div> Stair Bottom</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#fbbf24;border:2px solid #fbbf24"></div> Selected</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#f87171;border:2px dashed #f87171"></div> Disconnected</div>
+    <strong style="margin-top:6px">Edges</strong>
+    <div class="leg-row"><div class="leg-line" style="background:#38bdf8"></div> Normal</div>
+    <div class="leg-line" style="background:transparent"></div>
+    <div class="leg-row"><div class="leg-line" style="background:#c084fc"></div> Stair link</div>
+    <div class="leg-row"><div class="leg-line" style="background:#f87171;border-top:2px dashed #f87171"></div> Cross-component</div>
+  </div>
+
+  <div id="statusbar">
+    <span>Mode: <b id="modeLabel">View</b></span>
+    <span>Selected: <span id="sel-count">0</span> nodes</span>
+    <span>Zones: <span id="zone-count">0</span></span>
+    <span id="status-hint" style="color:#555">Click a node to inspect it</span>
   </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-// ── Map setup ────────────────────────────────────────────────────────────────
-const map = L.map('map', { preferCanvas: true }).setView([0, 0], 2);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© OpenStreetMap contributors', maxZoom: 22
-}).addTo(map);
-
-// ── State ────────────────────────────────────────────────────────────────────
-let graphData  = null;
-let layerGroup = L.layerGroup().addTo(map);
-let activeFloors = new Set();
-
-// Floor colours (cycles for > 5 floors)
-const FLOOR_PALETTE = ['#38bdf8','#f472b6','#34d399','#fbbf24','#a78bfa','#fb923c','#e879f9'];
-function floorColor(fl) {
-  const floors = [...activeFloors].sort();
-  const idx    = floors.indexOf(String(fl));
-  return FLOOR_PALETTE[idx % FLOOR_PALETTE.length] ?? '#38bdf8';
-}
-
-// Node type overrides (fill colour, shape hint)
-const TYPE_COLOR = {
-  DOOR:         '#fb923c',
-  STAIR_TOP:    '#a78bfa',
-  STAIR_BOTTOM: '#4ade80',
-  WAYPOINT:     null,    // use floor colour
+// ═══════════════════════════════════════════════════════════════════════════
+// THEME
+// ═══════════════════════════════════════════════════════════════════════════
+const TILES = {
+  dark:  { url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+           attr: '© OpenStreetMap contributors © CARTO' },
+  light: { url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+           attr: '© OpenStreetMap contributors © CARTO' },
 };
 
-// ── Graph render ─────────────────────────────────────────────────────────────
+// Separate palettes so nodes/edges are legible on both map styles
+const PALETTE = {
+  dark: {
+    floor:       ['#38bdf8','#f472b6','#34d399','#fbbf24','#a78bfa','#fb923c','#e879f9'],
+    type:        { DOOR:'#fb923c', STAIR_TOP:'#a78bfa', STAIR_MIDDLE:'#60a5fa', STAIR_BOTTOM:'#4ade80' },
+    selected:    '#fbbf24',
+    nodeStroke:  '#fff',
+    orphanStroke:'#f87171',
+    edgeNormal:  '#38bdf8',
+    edgeCross:   '#f87171',
+    edgeStair:   '#c084fc',
+  },
+  light: {
+    floor:       ['#0369a1','#be185d','#15803d','#b45309','#6d28d9','#c2410c','#a21caf'],
+    type:        { DOOR:'#c2410c', STAIR_TOP:'#6d28d9', STAIR_MIDDLE:'#1d4ed8', STAIR_BOTTOM:'#15803d' },
+    selected:    '#d97706',
+    nodeStroke:  '#111',
+    orphanStroke:'#dc2626',
+    edgeNormal:  '#2563eb',
+    edgeCross:   '#dc2626',
+    edgeStair:   '#7c3aed',
+  },
+};
+
+let isDark = true;
+let tileLayer = null;
+
+function applyTheme() {
+  document.body.classList.toggle('light', !isDark);
+  document.getElementById('themeBtn').textContent = isDark ? '🌙' : '☀️';
+  const t = TILES[isDark ? 'dark' : 'light'];
+  if (tileLayer) map.removeLayer(tileLayer);
+  tileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 22 }).addTo(map);
+  render();
+}
+
+function toggleTheme() {
+  isDark = !isDark;
+  applyTheme();
+}
+
+function palette() { return PALETTE[isDark ? 'dark' : 'light']; }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════
+let graphData   = null;   // { nodes: [], edges: [] }
+let undoStack   = [];     // snapshots before destructive ops
+let mode        = 'view'; // view | select | box | zone
+let selected    = new Set(); // selected node IDs
+let allowedZones = [];    // array of L.LatLngBounds
+
+let activeFloors = new Set();
+let layerGroup   = null;
+let zoneLayerGroup = null;
+
+// Box-draw state
+let isDrawing    = false;
+let drawStart    = null;
+let drawRect     = null; // L.Rectangle preview
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAP SETUP
+// ═══════════════════════════════════════════════════════════════════════════
+const map = L.map('map', { preferCanvas: true, zoomSnap: 0.5 }).setView([0,0], 2);
+
+layerGroup     = L.layerGroup().addTo(map);
+zoneLayerGroup = L.layerGroup().addTo(map);
+applyTheme(); // sets tileLayer and initial colours
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COLOURS
+// ═══════════════════════════════════════════════════════════════════════════
+function floorColor(fl) {
+  const p      = palette();
+  const floors = [...activeFloors].sort((a,b)=>parseFloat(a)-parseFloat(b)||String(a).localeCompare(String(b)));
+  const idx    = floors.indexOf(String(fl));
+  return p.floor[Math.max(0,idx) % p.floor.length];
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UNION-FIND (for component colouring)
+// ═══════════════════════════════════════════════════════════════════════════
+function buildComponents(nodes, edges) {
+  const p = {};
+  nodes.forEach(n => p[n.id] = n.id);
+  function find(x) { return p[x]===x ? x : (p[x]=find(p[x])); }
+  edges.forEach(e => { p[find(e.fromId)] = find(e.toId); });
+  const size = {};
+  nodes.forEach(n => { const c=find(n.id); size[c]=(size[c]||0)+1; });
+  const main = Object.entries(size).sort((a,b)=>b[1]-a[1])[0]?.[0];
+  return { find, size, main };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════════════════════
 function render() {
   layerGroup.clearLayers();
   if (!graphData) return;
 
   const { nodes, edges } = graphData;
-  const nodeMap = Object.fromEntries(nodes.map(n => [n.id, n]));
+  if (!nodes?.length) return;
 
-  // Disconnected-component analysis (union-find)
-  const parent = {};
-  nodes.forEach(n => parent[n.id] = n.id);
-  function find(x) { return parent[x] === x ? x : (parent[x] = find(parent[x])); }
-  function union(a, b) { parent[find(a)] = find(b); }
-  edges.forEach(e => union(e.fromId, e.toId));
-  const compId = id => find(id);
+  const nodeMap = Object.fromEntries(nodes.map(n=>[n.id,n]));
+  const { find, size, main } = buildComponents(nodes, edges);
 
-  // Count nodes per component
-  const compSize = {};
-  nodes.forEach(n => { const c = compId(n.id); compSize[c] = (compSize[c] || 0) + 1; });
-  const mainComp = Object.entries(compSize).sort((a,b) => b[1]-a[1])[0]?.[0];
-
-  // ── Edges ────────────────────────────────────────────────────────────────
+  // ── Edges ────────────────────────────────────────────────────────────
   edges.forEach(e => {
     const a = nodeMap[e.fromId], b = nodeMap[e.toId];
     if (!a || !b) return;
-    if (activeFloors.size > 0 && !activeFloors.has(String(a.floor)) && !activeFloors.has(String(b.floor))) return;
+    if (activeFloors.size &&
+        !activeFloors.has(String(a.floor)) &&
+        !activeFloors.has(String(b.floor))) return;
 
-    const sameComp    = compId(a.id) === compId(b.id);  // always true for edges but keep for clarity
-    const crossComp   = compId(a.id) !== mainComp || compId(b.id) !== mainComp;
-    const isStairEdge = (a.type === 'STAIR_TOP'    || a.type === 'STAIR_BOTTOM' ||
-                         b.type === 'STAIR_TOP'    || b.type === 'STAIR_BOTTOM');
+    const p       = palette();
+    const isStair = a.type?.startsWith('STAIR') || b.type?.startsWith('STAIR');
+    const diff    = find(a.id) !== find(b.id);
+    const color   = isStair ? p.edgeStair : diff ? p.edgeCross : p.edgeNormal;
+    const dash    = diff && !isStair ? '6 4' : null;
 
-    const color = isStairEdge ? '#c084fc' :
-                  crossComp   ? '#f87171' : '#38bdf8';
-    const dash  = crossComp && !isStairEdge ? '6 4' : null;
-    const w     = isStairEdge ? 2.5 : 1.5;
-
-    const line = L.polyline([[a.lat, a.lon],[b.lat, b.lon]], {
-      color, weight: w, opacity: .65, dashArray: dash
-    });
-    line.on('click', () => showEdgeInfo(e, a, b));
-    layerGroup.addLayer(line);
+    layerGroup.addLayer(L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{
+      color, weight: isStair?2.5:1.5, opacity:.7, dashArray: dash
+    }).on('click', ev=>{ L.DomEvent.stopPropagation(ev); showEdgeInfo(e,a,b); }));
   });
 
-  // ── Nodes ────────────────────────────────────────────────────────────────
+  // ── Nodes ────────────────────────────────────────────────────────────
   nodes.forEach(n => {
-    if (activeFloors.size > 0 && !activeFloors.has(String(n.floor))) return;
+    if (activeFloors.size && !activeFloors.has(String(n.floor))) return;
 
-    const isMain  = compId(n.id) === mainComp;
-    const fill    = TYPE_COLOR[n.type] ?? floorColor(n.floor);
-    const radius  = n.type === 'DOOR' ? 7 : n.type?.startsWith('STAIR') ? 8 : 5;
-    const stroke  = isMain ? '#fff' : '#f87171';
-    const sWeight = isMain ? 1 : 2.5;
+    const p       = palette();
+    const isSel   = selected.has(n.id);
+    const isMain  = find(n.id) === main;
+    const fill    = isSel ? p.selected : (p.type[n.type] ?? floorColor(n.floor));
+    const stroke  = isSel ? p.selected : isMain ? p.nodeStroke : p.orphanStroke;
+    const sWeight = isSel ? 3 : isMain ? 1 : 2.5;
+    const r       = n.type === 'DOOR' ? 7 : n.type?.startsWith('STAIR') ? 8 : 5;
 
-    const circle = L.circleMarker([n.lat, n.lon], {
-      radius, fillColor: fill, color: stroke, weight: sWeight,
-      fillOpacity: .9, opacity: 1
+    const circle = L.circleMarker([n.lat,n.lon],{
+      radius: r, fillColor: fill, color: stroke, weight: sWeight,
+      fillOpacity: isSel ? 1 : .85, opacity: 1
     });
-    circle.on('click', () => showNodeInfo(n, compId(n.id), compSize[compId(n.id)], isMain));
+
+    circle.on('click', ev => {
+      L.DomEvent.stopPropagation(ev);
+      if (mode === 'select') {
+        toggleSelect(n.id);
+      } else if (mode === 'view') {
+        showNodeInfo(n, find(n.id), size[find(n.id)], isMain);
+      }
+    });
+
     layerGroup.addLayer(circle);
   });
 }
 
-// ── Info panel ───────────────────────────────────────────────────────────────
-function showNodeInfo(n, comp, size, isMain) {
-  const rows = [
-    ['Type',  n.type || 'WAYPOINT'],
-    ['Floor', n.floor ?? '—'],
-    ['Lat',   n.lat.toFixed(8)],
-    ['Lon',   n.lon.toFixed(8)],
-    ['Alt',   n.alt?.toFixed(2) ?? '—'],
-    ['QR ID', n.anchorQrId || '—'],
-    ['Component', isMain ? `Main (${size} nodes)` : `Isolated (${size} nodes)`],
-    ['ID',    `<span style="font-size:10px;color:#666">${n.id}</span>`],
-  ];
-  showPanel('Node', rows);
+// ═══════════════════════════════════════════════════════════════════════════
+// ZONE RENDERING
+// ═══════════════════════════════════════════════════════════════════════════
+function renderZones() {
+  zoneLayerGroup.clearLayers();
+  allowedZones.forEach((bounds, i) => {
+    zoneLayerGroup.addLayer(L.rectangle(bounds, {
+      color: '#4ade80', weight: 2, opacity: .8,
+      fillColor: '#4ade80', fillOpacity: .08,
+      dashArray: '6 3'
+    }));
+  });
+  document.getElementById('zone-count').textContent = allowedZones.length;
+  document.getElementById('zoneCount').textContent  = allowedZones.length;
+  document.getElementById('trimZoneBtn').disabled   = allowedZones.length === 0;
+  document.getElementById('clearZoneBtn').disabled  = allowedZones.length === 0;
 }
 
-function showEdgeInfo(e, a, b) {
-  const rows = [
-    ['Weight', e.weight?.toFixed(3) ?? '—'],
-    ['From floor', a.floor ?? '—'],
-    ['To floor',   b.floor ?? '—'],
-    ['From type',  a.type || 'WAYPOINT'],
-    ['To type',    b.type || 'WAYPOINT'],
-  ];
-  showPanel('Edge', rows);
+// ═══════════════════════════════════════════════════════════════════════════
+// SELECTION
+// ═══════════════════════════════════════════════════════════════════════════
+function toggleSelect(id) {
+  if (selected.has(id)) selected.delete(id);
+  else selected.add(id);
+  updateSelUI();
+  render();
 }
 
-function showPanel(title, rows) {
-  document.getElementById('info-title').textContent = title;
-  document.getElementById('info-table').innerHTML =
-    rows.map(([k,v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join('');
-  document.getElementById('info-panel').style.display = 'block';
+function selectNodesInBounds(bounds) {
+  graphData?.nodes.forEach(n => {
+    if (bounds.contains([n.lat, n.lon])) selected.add(n.id);
+  });
+  updateSelUI();
+  render();
 }
 
-// ── Floor chips ──────────────────────────────────────────────────────────────
+function selectAll() {
+  graphData?.nodes.forEach(n => { if (!activeFloors.size || activeFloors.has(String(n.floor))) selected.add(n.id); });
+  updateSelUI(); render();
+}
+
+/** Select all visible nodes whose type matches [typeName] (or WAYPOINT for null/undefined). */
+function selectByType(typeName) {
+  if (!graphData) return;
+  setMode('select');
+  graphData.nodes.forEach(n => {
+    if (activeFloors.size && !activeFloors.has(String(n.floor))) return;
+    const t = n.type || 'WAYPOINT';
+    if (t === typeName) selected.add(n.id);
+  });
+  updateSelUI(); render();
+  setStatus(`Selected ${selected.size} ${typeName.replace('_', ' ').toLowerCase()} node(s)`);
+}
+
+/** Select all visible nodes that are NOT in the largest graph component. */
+function selectIsolated() {
+  if (!graphData) return;
+  setMode('select');
+  const { find, main } = buildComponents(graphData.nodes, graphData.edges);
+  graphData.nodes.forEach(n => {
+    if (activeFloors.size && !activeFloors.has(String(n.floor))) return;
+    if (find(n.id) !== main) selected.add(n.id);
+  });
+  updateSelUI(); render();
+  setStatus(`Selected ${selected.size} isolated node(s)`);
+}
+
+function deselect() {
+  selected.clear();
+  updateSelUI(); render();
+}
+
+function updateSelUI() {
+  const n = selected.size;
+  document.getElementById('sel-count').textContent  = n;
+  document.getElementById('selCount').textContent   = n;
+  document.getElementById('deleteSelBtn').disabled  = n === 0;
+  document.getElementById('deselBtn').disabled      = n === 0;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DESTRUCTIVE OPS
+// ═══════════════════════════════════════════════════════════════════════════
+function pushUndo() {
+  undoStack.push(JSON.stringify(graphData));
+  if (undoStack.length > 30) undoStack.shift();
+  document.getElementById('undoBtn').disabled = false;
+}
+
+function undo() {
+  if (!undoStack.length) return;
+  graphData = JSON.parse(undoStack.pop());
+  if (!undoStack.length) document.getElementById('undoBtn').disabled = true;
+  selected.clear();
+  updateSelUI();
+  render();
+  updateStats();
+  setStatus('Undo applied');
+}
+
+function deleteSelected() {
+  if (!selected.size || !graphData) return;
+  pushUndo();
+  graphData.edges = graphData.edges.filter(e => !selected.has(e.fromId) && !selected.has(e.toId));
+  graphData.nodes = graphData.nodes.filter(n => !selected.has(n.id));
+  const count = selected.size;
+  selected.clear();
+  updateSelUI();
+  render();
+  updateStats();
+  setStatus(`Deleted ${count} node(s) and their edges`);
+}
+
+function trimToZones() {
+  if (!allowedZones.length || !graphData) return;
+  pushUndo();
+  const toDelete = new Set(
+    graphData.nodes
+      .filter(n => !allowedZones.some(b => b.contains([n.lat, n.lon])))
+      .map(n => n.id)
+  );
+  const count = toDelete.size;
+  graphData.edges = graphData.edges.filter(e => !toDelete.has(e.fromId) && !toDelete.has(e.toId));
+  graphData.nodes = graphData.nodes.filter(n => !toDelete.has(n.id));
+  selected.clear();
+  updateSelUI();
+  render();
+  updateStats();
+  setStatus(`Trimmed ${count} node(s) outside allowed zones`);
+}
+
+function clearZones() {
+  allowedZones = [];
+  renderZones();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MODE
+// ═══════════════════════════════════════════════════════════════════════════
+const MODE_HINTS = {
+  view:   'Click a node or edge to inspect it',
+  select: 'Click nodes to select/deselect • Select All • Delete Selected',
+  box:    'Drag a rectangle to select nodes inside it',
+  zone:   'Drag rectangles to mark allowed building areas • then Trim to Zones',
+  fill:   'Drag a rectangle over the area to fill with evenly-spaced nodes',
+};
+const MODE_LABELS = { view:'View', select:'Select', box:'Box Select', zone:'Allowed Zone', fill:'Fill Nodes' };
+
+function setMode(m) {
+  mode = m;
+  ['view','select','box','zone','fill'].forEach(id => {
+    document.getElementById('btn-'+id).classList.toggle('active', id === m);
+  });
+  const mapEl = document.getElementById('map');
+  mapEl.className = m !== 'view' ? `mode-${m}` : '';
+  document.getElementById('modeLabel').textContent   = MODE_LABELS[m];
+  document.getElementById('status-hint').textContent = MODE_HINTS[m];
+  document.getElementById('selAllBtn').disabled = m !== 'select';
+
+  if (m === 'box' || m === 'zone' || m === 'fill') {
+    map.dragging.disable();
+  } else {
+    map.dragging.enable();
+  }
+  if (m !== 'select') { selected.clear(); updateSelUI(); render(); }
+  if (m !== 'fill') hideFillPanel();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RECTANGLE DRAW (box select + zone + fill)
+// ═══════════════════════════════════════════════════════════════════════════
+map.on('mousedown', e => {
+  if (mode !== 'box' && mode !== 'zone' && mode !== 'fill') return;
+  if (e.originalEvent.button !== 0) return;
+  hideFillPanel();
+  isDrawing = true;
+  drawStart = e.latlng;
+  if (drawRect) { drawRect.remove(); drawRect = null; }
+});
+
+map.on('mousemove', e => {
+  if (!isDrawing || !drawStart) return;
+  const bounds = L.latLngBounds(drawStart, e.latlng);
+  if (drawRect) drawRect.remove();
+  const col = mode === 'zone' ? '#4ade80' : mode === 'fill' ? '#a78bfa' : '#fbbf24';
+  drawRect = L.rectangle(bounds, {
+    color: col, weight: 1.5, opacity: .8,
+    fillColor: col, fillOpacity: .08, dashArray: '4 3'
+  }).addTo(map);
+});
+
+map.on('mouseup', e => {
+  if (!isDrawing || !drawStart) return;
+  isDrawing = false;
+  const bounds = L.latLngBounds(drawStart, e.latlng);
+  drawStart = null;
+  if (drawRect) { drawRect.remove(); drawRect = null; }
+
+  const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
+  const tooSmall = Math.abs(sw.lat-ne.lat) < 0.000005 && Math.abs(sw.lng-ne.lng) < 0.000005;
+  if (tooSmall) return;
+
+  if (mode === 'box') {
+    selectNodesInBounds(bounds);
+    setStatus(`Box selected ${selected.size} node(s)`);
+  } else if (mode === 'zone') {
+    allowedZones.push(bounds);
+    renderZones();
+    setStatus(`Zone ${allowedZones.length} added — draw more or click Trim to Zones`);
+  } else if (mode === 'fill') {
+    showFillPanel(bounds);
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FILL TOOL
+// ═══════════════════════════════════════════════════════════════════════════
+let pendingFillBounds = null;
+
+/** Great-circle distance in metres (JS version used by fill tool). */
+function haversineM(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2-lat1)*Math.PI/180;
+  const dLon = (lon2-lon1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 +
+            Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/** Estimate how many nodes a fill would produce without generating them. */
+function estimateFillCount(bounds, spacingM) {
+  const sw = bounds.getSouthWest(), ne = bounds.getNorthEast();
+  const cLat = (sw.lat + ne.lat) / 2;
+  const dLat = spacingM / 111111;
+  const dLon = spacingM / (111111 * Math.cos(cLat * Math.PI / 180));
+  const rows = Math.floor((ne.lat - sw.lat) / dLat) + 1;
+  const cols = Math.floor((ne.lng  - sw.lng) / dLon) + 1;
+  return rows * cols;
+}
+
+function showFillPanel(bounds) {
+  pendingFillBounds = bounds;
+  updateFillPreview();
+  document.getElementById('fill-panel').style.display = 'block';
+  document.getElementById('fillSpacing').focus();
+}
+
+function hideFillPanel() {
+  document.getElementById('fill-panel').style.display = 'none';
+  pendingFillBounds = null;
+}
+
+function updateFillPreview() {
+  if (!pendingFillBounds) return;
+  const spacing = parseFloat(document.getElementById('fillSpacing').value) || 2;
+  const count   = estimateFillCount(pendingFillBounds, spacing);
+  document.getElementById('fill-preview').textContent =
+    count > 2000
+      ? `⚠ ~${count} nodes — consider a larger spacing`
+      : `~${count} nodes will be generated`;
+}
+
+document.getElementById('fillSpacing').addEventListener('input', updateFillPreview);
+
+function cancelFill() {
+  hideFillPanel();
+  setStatus('Fill cancelled');
+}
+
+function confirmFill() {
+  if (!pendingFillBounds || !graphData) return;
+  const spacingM = Math.max(0.5, parseFloat(document.getElementById('fillSpacing').value) || 2.0);
+  const snapM    = Math.max(1.0, parseFloat(document.getElementById('fillSnap').value)    || 6.0);
+  const bounds   = pendingFillBounds;
+  hideFillPanel();
+  generateFill(bounds, spacingM, snapM);
+  setMode('view');
+}
+
+function generateFill(bounds, spacingM, snapM) {
+  const sw   = bounds.getSouthWest();
+  const ne   = bounds.getNorthEast();
+  const cLat = (sw.lat + ne.lat) / 2;
+
+  // Degrees-per-metre for this latitude
+  const dLat = spacingM / 111111;
+  const dLon = spacingM / (111111 * Math.cos(cLat * Math.PI / 180));
+
+  // Build grid of (lat, lon) positions
+  const lats = [], lons = [];
+  for (let lat = sw.lat; lat <= ne.lat + dLat * 0.01; lat += dLat) lats.push(lat);
+  for (let lon = sw.lng; lon <= ne.lng + dLon * 0.01; lon += dLon) lons.push(lon);
+
+  const newNodes = [];
+  const newEdges = [];
+  const gridId   = {};  // "r,c" -> nodeId
+
+  // ── Generate nodes with interpolated altitude ────────────────────────────
+  const altLookupRadius = Math.max(snapM * 3, 20); // wider search for IDW
+  for (let r = 0; r < lats.length; r++) {
+    for (let c = 0; c < lons.length; c++) {
+      const lat = lats[r], lon = lons[c];
+
+      // Inverse-distance weighting from nearby existing nodes
+      const nearby = graphData.nodes
+        .map(n => ({ n, d: haversineM(lat, lon, n.lat, n.lon) }))
+        .filter(x => x.d <= altLookupRadius)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 8);
+
+      let alt = 0, floor = '1';
+      if (nearby.length > 0) {
+        let sumW = 0, sumWAlt = 0;
+        const floorW = {};
+        for (const { n, d } of nearby) {
+          const w = d < 0.1 ? 1e9 : 1 / (d * d);
+          sumW += w; sumWAlt += w * (n.alt ?? 0);
+          const fl = String(n.floor ?? '1');
+          floorW[fl] = (floorW[fl] || 0) + w;
+        }
+        alt   = sumW > 0 ? sumWAlt / sumW : 0;
+        floor = Object.entries(floorW).sort((a,b) => b[1]-a[1])[0]?.[0] ?? '1';
+      }
+
+      const id = 'fill-' + Math.random().toString(36).slice(2,10) + r + 'x' + c;
+      newNodes.push({ id, lat, lon, alt, floor, type: 'WAYPOINT', anchorQrId: null, label: '' });
+      gridId[`${r},${c}`] = id;
+    }
+  }
+
+  // ── Grid edges (right + down, bidirectional) ─────────────────────────────
+  for (let r = 0; r < lats.length; r++) {
+    for (let c = 0; c < lons.length; c++) {
+      const fromId = gridId[`${r},${c}`];
+      if (!fromId) continue;
+
+      const rightId = gridId[`${r},${c+1}`];
+      if (rightId) {
+        const w = haversineM(lats[r], lons[c], lats[r], lons[c+1]);
+        newEdges.push({ fromId, toId: rightId, weight: w });
+        newEdges.push({ fromId: rightId, toId: fromId, weight: w });
+      }
+      const downId = gridId[`${r+1},${c}`];
+      if (downId) {
+        const w = haversineM(lats[r], lons[c], lats[r+1], lons[c]);
+        newEdges.push({ fromId, toId: downId, weight: w });
+        newEdges.push({ fromId: downId, toId: fromId, weight: w });
+      }
+    }
+  }
+
+  // ── Bridge new nodes to nearby existing nodes ────────────────────────────
+  for (const nn of newNodes) {
+    for (const ex of graphData.nodes) {
+      const d = haversineM(nn.lat, nn.lon, ex.lat, ex.lon);
+      if (d <= snapM) {
+        newEdges.push({ fromId: nn.id, toId: ex.id, weight: d });
+        newEdges.push({ fromId: ex.id, toId: nn.id, weight: d });
+      }
+    }
+  }
+
+  // ── Commit (deduplicate edges by composite key) ──────────────────────────
+  pushUndo();
+  graphData.nodes = [...graphData.nodes, ...newNodes];
+  const seen = new Set(graphData.edges.map(e => `${e.fromId}|${e.toId}`));
+  for (const e of newEdges) {
+    const k = `${e.fromId}|${e.toId}`;
+    if (!seen.has(k)) { seen.add(k); graphData.edges.push(e); }
+  }
+
+  render();
+  updateStats();
+  setStatus(`Filled ${newNodes.length} node(s), ${newEdges.length} edge(s) added`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOAD / EXPORT
+// ═══════════════════════════════════════════════════════════════════════════
+function loadJSON(text) {
+  let data;
+  try { data = JSON.parse(text); } catch {
+    alert('Could not parse JSON — make sure this is a navgraph.json file.');
+    return;
+  }
+  graphData  = data;
+  undoStack  = [];
+  selected.clear();
+  allowedZones = [];
+  document.getElementById('undoBtn').disabled    = true;
+  document.getElementById('exportBtn').disabled  = false;
+  document.getElementById('selAllBtn').disabled  = mode !== 'select';
+
+  const floors = [...new Set(graphData.nodes.map(n=>String(n.floor??'1')))];
+  activeFloors = new Set(floors);
+  buildFloorChips(floors);
+  updateSelUI();
+  updateStats();
+  renderZones();
+  render();
+
+  if (graphData.nodes.length) {
+    const lats = graphData.nodes.map(n=>n.lat);
+    const lons = graphData.nodes.map(n=>n.lon);
+    map.fitBounds([
+      [Math.min(...lats)-.0002, Math.min(...lons)-.0002],
+      [Math.max(...lats)+.0002, Math.max(...lons)+.0002]
+    ]);
+  }
+  setStatus('Loaded — ' + graphData.nodes.length + ' nodes, ' + graphData.edges.length + ' edges');
+}
+
+function exportJSON() {
+  if (!graphData) return;
+  const blob = new Blob([JSON.stringify(graphData, null, 2)], {type:'application/json'});
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = 'navgraph.json';
+  a.click();
+  setStatus('Exported navgraph.json');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FLOOR CHIPS
+// ═══════════════════════════════════════════════════════════════════════════
 function buildFloorChips(floors) {
   const wrap = document.getElementById('floor-chips');
   wrap.innerHTML = '';
-  if (floors.length < 2) return;
-
-  const label = document.createElement('span');
-  label.className = 'tb-label';
-  label.textContent = 'Floor:';
-  wrap.appendChild(label);
-
-  floors.sort((a,b) => {
-    const na = parseFloat(a), nb = parseFloat(b);
-    return isNaN(na) || isNaN(nb) ? a.localeCompare(b) : na - nb;
-  }).forEach(fl => {
+  const sorted = [...floors].sort((a,b)=>parseFloat(a)-parseFloat(b)||a.localeCompare(b));
+  sorted.forEach(fl => {
     const chip = document.createElement('div');
     chip.className = 'chip';
     chip.dataset.floor = fl;
@@ -254,87 +919,96 @@ function buildFloorChips(floors) {
     dot.className = 'chip-dot';
     dot.style.background = floorColor(fl);
     chip.appendChild(dot);
-    chip.appendChild(document.createTextNode(`Floor ${fl}`));
-    chip.addEventListener('click', () => toggleFloor(fl, chip));
+    chip.appendChild(document.createTextNode('F'+fl));
+    chip.addEventListener('click', () => {
+      if (activeFloors.has(fl)) { activeFloors.delete(fl); chip.classList.add('off'); }
+      else                      { activeFloors.add(fl);    chip.classList.remove('off'); }
+      render();
+    });
     wrap.appendChild(chip);
   });
 }
 
-function toggleFloor(fl, chip) {
-  if (activeFloors.has(fl)) {
-    activeFloors.delete(fl);
-    chip.classList.add('off');
-  } else {
-    activeFloors.add(fl);
-    chip.classList.remove('off');
-  }
-  render();
+// ═══════════════════════════════════════════════════════════════════════════
+// INFO PANEL
+// ═══════════════════════════════════════════════════════════════════════════
+function showNodeInfo(n, comp, sz, isMain) {
+  showPanel('Node', [
+    ['Type',      n.type || 'WAYPOINT'],
+    ['Floor',     n.floor ?? '—'],
+    ['Lat',       n.lat.toFixed(8)],
+    ['Lon',       n.lon.toFixed(8)],
+    ['Alt',       n.alt != null ? n.alt.toFixed(2)+'m' : '—'],
+    ['QR link',   n.anchorQrId || '—'],
+    ['Component', isMain ? `Main (${sz})` : `⚠ Isolated (${sz})`],
+    ['ID',        `<span style="font-size:10px;color:#555">${n.id}</span>`],
+  ]);
+}
+function showEdgeInfo(e, a, b) {
+  showPanel('Edge', [
+    ['Weight',     e.weight?.toFixed(3)+'m' ?? '—'],
+    ['From floor', a.floor ?? '—'],
+    ['To floor',   b.floor ?? '—'],
+    ['From type',  a.type || 'WAYPOINT'],
+    ['To type',    b.type || 'WAYPOINT'],
+  ]);
+}
+function showPanel(title, rows) {
+  document.getElementById('info-title').textContent  = title;
+  document.getElementById('info-table').innerHTML    =
+    rows.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('');
+  document.getElementById('info-panel').style.display = 'block';
 }
 
-// ── Stats bar ────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// STATS & STATUS
+// ═══════════════════════════════════════════════════════════════════════════
 function updateStats() {
   if (!graphData) return;
   const { nodes, edges } = graphData;
-
-  // component count
-  const parent = {};
-  nodes.forEach(n => parent[n.id] = n.id);
-  function find(x) { return parent[x] === x ? x : (parent[x] = find(parent[x])); }
-  edges.forEach(e => { parent[find(e.fromId)] = find(e.toId); });
-  const comps = new Set(nodes.map(n => find(n.id)));
-
+  const { find } = buildComponents(nodes, edges);
+  const comps = new Set(nodes.map(n=>find(n.id))).size;
   document.getElementById('stats').textContent =
-    `${nodes.length} nodes · ${edges.length} edges · ${comps.size} component${comps.size !== 1 ? 's' : ''}`;
+    `${nodes.length} nodes · ${edges.length} edges · ${comps} component${comps!==1?'s':''}`;
+}
+function setStatus(msg) {
+  document.getElementById('status-hint').textContent = msg;
 }
 
-// ── Load graph ───────────────────────────────────────────────────────────────
-function loadJSON(text) {
-  try {
-    graphData = JSON.parse(text);
-  } catch {
-    alert('Could not parse JSON — make sure this is a navgraph.json file.');
-    return;
-  }
-
-  const floors = [...new Set(graphData.nodes.map(n => String(n.floor ?? '1')))];
-  activeFloors = new Set(floors);
-  buildFloorChips(floors);
-  updateStats();
-  render();
-
-  // Fit map to nodes
-  if (graphData.nodes.length > 0) {
-    const lats = graphData.nodes.map(n => n.lat);
-    const lons = graphData.nodes.map(n => n.lon);
-    map.fitBounds([
-      [Math.min(...lats) - .0001, Math.min(...lons) - .0001],
-      [Math.max(...lats) + .0001, Math.max(...lons) + .0001]
-    ]);
-  }
-}
-
-// ── File input ───────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// FILE INPUT
+// ═══════════════════════════════════════════════════════════════════════════
 document.getElementById('fileInput').addEventListener('change', e => {
-  const f = e.target.files[0];
-  if (!f) return;
+  const f = e.target.files[0]; if (!f) return;
   const r = new FileReader();
   r.onload = ev => loadJSON(ev.target.result);
   r.readAsText(f);
   e.target.value = '';
 });
 
-// ── Drag & drop ──────────────────────────────────────────────────────────────
+// ── Drag & drop ──────────────────────────────────────────────────────────
 const overlay = document.getElementById('drop-overlay');
-document.addEventListener('dragover', e => { e.preventDefault(); overlay.classList.add('show'); });
+document.addEventListener('dragover',  e => { e.preventDefault(); overlay.classList.add('show'); });
 document.addEventListener('dragleave', e => { if (!e.relatedTarget) overlay.classList.remove('show'); });
 document.addEventListener('drop', e => {
-  e.preventDefault();
-  overlay.classList.remove('show');
-  const f = e.dataTransfer.files[0];
-  if (!f) return;
+  e.preventDefault(); overlay.classList.remove('show');
+  const f = e.dataTransfer.files[0]; if (!f) return;
   const r = new FileReader();
   r.onload = ev => loadJSON(ev.target.result);
   r.readAsText(f);
+});
+
+// ── Keyboard shortcuts ───────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size) deleteSelected();
+  if (e.key === 'Escape') { deselect(); setMode('view'); }
+  if (e.key === 'z' && (e.ctrlKey||e.metaKey)) undo();
+  if (e.key === '1') setMode('view');
+  if (e.key === '2') setMode('select');
+  if (e.key === '3') setMode('box');
+  if (e.key === '4') setMode('zone');
+  if (e.key === '5') setMode('fill');
 });
 </script>
 </body>

@@ -38,4 +38,25 @@ interface NavDao {
     /** Returns all nodes whose [NodeType] matches [type] (stored as its name string). */
     @Query("SELECT * FROM nav_nodes WHERE type = :type")
     suspend fun getNodesByType(type: String): List<NavNode>
+
+    /**
+     * Removes every edge whose [NavEdge.fromId] or [NavEdge.toId] no longer exists
+     * in [nav_nodes].  Call this after any bulk node deletion (Gist sync, manual
+     * clear) to keep the edge table consistent and prevent the pathfinder from
+     * traversing stale references.
+     */
+    @Query("""
+        DELETE FROM nav_edges
+        WHERE fromId NOT IN (SELECT id FROM nav_nodes)
+           OR toId   NOT IN (SELECT id FROM nav_nodes)
+    """)
+    suspend fun pruneOrphanEdges()
+
+    /** Deletes a single node and all edges that reference it. */
+    @Query("DELETE FROM nav_nodes WHERE id = :nodeId")
+    suspend fun deleteNode(nodeId: String)
+
+    /** Removes all edges connected to [nodeId] (call before or after deleteNode). */
+    @Query("DELETE FROM nav_edges WHERE fromId = :nodeId OR toId = :nodeId")
+    suspend fun deleteEdgesForNode(nodeId: String)
 }

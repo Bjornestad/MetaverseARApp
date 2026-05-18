@@ -204,15 +204,18 @@ fun ARScreen(
             destAnchorNodeCount = 0
             if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
             if (path.size < 2) return@LaunchedEffect
-            val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
 
             destArrowAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
                 val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
+                // pt.alt is the corrected node altitude (VPS minus offset).
+                // Adding altOffset converts back to raw VPS altitude; subtracting
+                // 1.7 m puts the anchor at floor level rather than eye level.
+                // This makes arrows on upper floors appear at the right height.
                 try {
                     earth.createAnchor(
                         pt.lat + viewModel.latOffset,
                         pt.lon + viewModel.lonOffset,
-                        floorAlt,
+                        pt.alt + viewModel.altOffset - 1.7,
                         q[0], q[1], q[2], q[3]
                     )
                 } catch (_: Exception) { null }
@@ -254,7 +257,6 @@ fun ARScreen(
         if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
         val path = viewModel.testPathNodes
         if (path.size < 2) return@LaunchedEffect
-        val floorAlt = viewModel.geospatialPose?.altitude?.minus(1.7) ?: return@LaunchedEffect
 
         testCrumbAnchors = NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
             val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
@@ -262,7 +264,7 @@ fun ARScreen(
                 earth.createAnchor(
                     pt.lat + viewModel.latOffset,
                     pt.lon + viewModel.lonOffset,
-                    floorAlt,
+                    pt.alt + viewModel.altOffset - 1.7,
                     q[0], q[1], q[2], q[3]
                 )
             } catch (_: Exception) { null }

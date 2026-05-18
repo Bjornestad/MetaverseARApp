@@ -71,7 +71,7 @@ object NavGraphPathfinder {
     // ── Arrow interpolation ───────────────────────────────────────────────────
 
     /** A single arrow position along an interpolated path. */
-    data class ArrowPoint(val lat: Double, val lon: Double, val bearing: Double)
+    data class ArrowPoint(val lat: Double, val lon: Double, val alt: Double, val bearing: Double)
 
     /**
      * Produces evenly-spaced arrow positions along [path] at [spacingMeters] intervals.
@@ -81,6 +81,14 @@ object NavGraphPathfinder {
      * carrying any remainder distance into the next segment.  The result is a
      * uniform breadcrumb trail whose density doesn't depend on how closely the
      * nodes were recorded.
+     *
+     * Segment length is computed in 3-D (horizontal + vertical) so staircase
+     * segments — which have large altitude change but small horizontal movement —
+     * are measured correctly and arrows are spaced evenly up the stairs.
+     *
+     * [alt] on each point is linearly interpolated between the two bounding nodes,
+     * so anchors on upper floors are placed at the correct physical altitude rather
+     * than snapped to the user's current floor.
      *
      * The first arrow appears at half-spacing from the first node so the user
      * sees a direction cue immediately on path load.
@@ -95,11 +103,15 @@ object NavGraphPathfinder {
         var distToNext = spacingMeters * 0.5
 
         for (i in 0 until path.size - 1) {
-            val a      = path[i]
-            val b      = path[i + 1]
-            val segLen = haversine(a.lat, a.lon, b.lat, b.lon)
+            val a = path[i]
+            val b = path[i + 1]
+            // Use 3-D distance so stair segments (high vertical, low horizontal)
+            // are measured properly and don't cause bunching or skipping.
+            val segLen = distance3d(a.lat, a.lon, a.alt, b.lat, b.lon, b.alt)
             if (segLen == 0.0) continue
-            val brng   = bearing(a.lat, a.lon, b.lat, b.lon)
+            // Bearing is still computed from lat/lon only — this gives the
+            // correct compass direction for the user to face on each segment.
+            val brng = bearing(a.lat, a.lon, b.lat, b.lon)
 
             while (distToNext <= segLen) {
                 val frac = distToNext / segLen
@@ -107,6 +119,7 @@ object NavGraphPathfinder {
                     ArrowPoint(
                         lat     = a.lat + frac * (b.lat - a.lat),
                         lon     = a.lon + frac * (b.lon - a.lon),
+                        alt     = a.alt + frac * (b.alt - a.alt),   // interpolated floor alt
                         bearing = brng
                     )
                 )

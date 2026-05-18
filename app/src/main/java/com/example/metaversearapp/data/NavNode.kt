@@ -8,10 +8,11 @@ import kotlinx.serialization.Serializable
 /** Semantic type of a nav node, used for routing hints and AR visuals. */
 @Serializable
 enum class NodeType {
-    WAYPOINT,     // ordinary path node
-    DOOR,         // doorway / entrance
-    STAIR_TOP,    // top landing of a staircase
-    STAIR_BOTTOM  // bottom landing of a staircase
+    WAYPOINT,      // ordinary path node
+    DOOR,          // doorway / entrance
+    STAIR_TOP,     // top landing of a staircase
+    STAIR_MIDDLE,  // intermediate node along a staircase (improves arrow tracking up stairs)
+    STAIR_BOTTOM   // bottom landing of a staircase
 }
 
 /** Room TypeConverter so NodeType is stored as its name string. */

@@ -94,10 +94,11 @@ internal fun AdminRecordingScreen(
     var statusMsg        by remember { mutableStateOf("Ready — tap Start Recording, or scan a QR to improve accuracy") }
     var lastNodeType     by remember { mutableStateOf(NodeType.WAYPOINT) }
 
-    // Auto-bridging: snapshot of existing nodes taken at segment start.
-    // Tracks which nodes have already been bridged to avoid duplicate edges.
+    // Auto-bridging: snapshot of existing nodes taken at recording-segment start.
+    // Duplicate edges are handled by Room's composite primary key (ON CONFLICT REPLACE)
+    // so we don't need a separate bridgedNodeIds set — every nearby node gets a bridge
+    // attempt on every new node, and the DB deduplicates silently.
     var preloadedNodes by remember { mutableStateOf<List<NavNode>>(emptyList()) }
-    val bridgedNodeIds  = remember { mutableSetOf<String>() }
 
     // ── Door → QR link picker state ────────────────────────────────────────────
     var showDoorLinkDialog by remember { mutableStateOf(false) }
@@ -135,6 +136,11 @@ internal fun AdminRecordingScreen(
             statusMsg = "Marked as ${type.name.replace('_', ' ').lowercase()
                 .replaceFirstChar { it.uppercase() }}"
 
+            // Auto-connect stair nodes:
+            //  - STAIR_TOP / STAIR_BOTTOM link to each other across floors (existing behaviour)
+            //  - STAIR_MIDDLE links to all adjacent stair-type nodes (top, mid, bottom)
+            //    within 3-D STAIR_CONNECT_RADIUS_M, making dense mid-node chains that
+            //    give the arrow interpolation enough points to follow the staircase.
             if (type == NodeType.STAIR_TOP || type == NodeType.STAIR_BOTTOM) {
                 val complementType = if (type == NodeType.STAIR_TOP)
                     NodeType.STAIR_BOTTOM else NodeType.STAIR_TOP
@@ -156,6 +162,37 @@ internal fun AdminRecordingScreen(
                 }
                 if (connected > 0) {
                     statusMsg = "Marked + auto-connected to $connected stair node(s) on other floor(s)"
+                }
+            }
+
+            if (type == NodeType.STAIR_MIDDLE) {
+                // Connect this mid-point to any nearby stair node (top, mid, or bottom)
+                // that was recorded in a previous session.  This stitches together
+                // partial staircase recordings and gives the path enough 3-D waypoints
+                // for arrows to track smoothly up/down the stairs.
+                val stairTypes = listOf(
+                    NodeType.STAIR_TOP.name,
+                    NodeType.STAIR_MIDDLE.name,
+                    NodeType.STAIR_BOTTOM.name
+                )
+                val candidates = stairTypes
+                    .flatMap { db.navDao().getNodesByType(it) }
+                    .distinctBy { it.id }
+                    .filter { it.id != node.id }
+                var connected = 0
+                for (candidate in candidates) {
+                    val dist3d = NavGraphPathfinder.distance3d(
+                        node.lat, node.lon, node.alt,
+                        candidate.lat, candidate.lon, candidate.alt
+                    )
+                    if (dist3d <= STAIR_CONNECT_RADIUS_M) {
+                        db.navDao().insertEdge(NavEdge(node.id, candidate.id, dist3d))
+                        sessionEdges++
+                        connected++
+                    }
+                }
+                if (connected > 0) {
+                    statusMsg = "Stair Mid marked + linked to $connected nearby stair node(s)"
                 }
             }
 
@@ -224,8 +261,11 @@ internal fun AdminRecordingScreen(
                         val corrLat = pose.latitude  - latOffset
                         val corrLon = pose.longitude - lonOffset
                         val corrAlt = pose.altitude  - altOffset
+                        // Use 3-D distance so nodes are placed evenly on staircases:
+                        // haversine-only would under-measure steep stairs (large vertical,
+                        // small horizontal) and cause nodes to bunch up at the top/bottom.
                         val dist    = lastRecordedNode?.let {
-                            NavGraphPathfinder.haversine(corrLat, corrLon, it.lat, it.lon)
+                            NavGraphPathfinder.distance3d(corrLat, corrLon, corrAlt, it.lat, it.lon, it.alt)
                         } ?: Double.MAX_VALUE
 
                         if (dist >= MIN_NODE_DISTANCE_M) {
@@ -256,11 +296,16 @@ internal fun AdminRecordingScreen(
                                     )
                                     sessionEdges++
                                 }
-                                // Auto-bridge to nearby pre-recorded segments
+                                // Auto-bridge to nearby pre-recorded segments.
+                                // No bridgedNodeIds guard — Room's composite PK
+                                // deduplicates edges silently on REPLACE, so every
+                                // nearby node gets a connection attempt each capture.
+                                // Altitude guard prevents spurious cross-floor bridges
+                                // between vertically stacked corridors.
                                 val bridges = preloadedNodes.filter { existing ->
                                     existing.id != newNode.id &&
                                     existing.id != prevNode?.id &&
-                                    existing.id !in bridgedNodeIds &&
+                                    kotlin.math.abs(existing.alt - newNode.alt) <= 3.0 &&
                                     NavGraphPathfinder.haversine(
                                         newNode.lat, newNode.lon, existing.lat, existing.lon
                                     ) <= SEGMENT_SNAP_RADIUS_M
@@ -272,7 +317,6 @@ internal fun AdminRecordingScreen(
                                     )
                                     db.navDao().insertEdge(NavEdge(newNode.id, nearby.id, d))
                                     db.navDao().insertEdge(NavEdge(nearby.id, newNode.id, d))
-                                    bridgedNodeIds.add(nearby.id)
                                     sessionEdges += 2
                                 }
                                 if (bridges.isNotEmpty()) {
@@ -387,7 +431,6 @@ internal fun AdminRecordingScreen(
                     if (isRecording) {
                         lastRecordedNode = null
                         lastNodeType     = NodeType.WAYPOINT
-                        bridgedNodeIds.clear()
                         scope.launch {
                             preloadedNodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
                             statusMsg = "Recording — walk the corridor"

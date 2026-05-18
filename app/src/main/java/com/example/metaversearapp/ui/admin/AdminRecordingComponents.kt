@@ -207,7 +207,7 @@ private fun FloorSelectorCard(currentFloor: String, onFloorChange: (String) -> U
     }
 }
 
-/** Door / Stair-top / Stair-bottom marker buttons, with active-type badge. */
+/** Door / Stair-top / Stair-middle / Stair-bottom marker buttons, with active-type badge. */
 @Composable
 private fun MarkWaypointCard(
     lastRecordedNode: NavNode?,
@@ -228,10 +228,11 @@ private fun MarkWaypointCard(
                 Text("Mark last waypoint", color = Color.Gray, fontSize = 11.sp)
                 if (lastRecordedNode != null) {
                     val (typeLabel, typeColor) = when (lastNodeType) {
-                        NodeType.DOOR         -> "DOOR"         to Color(0xFFFFA726)
-                        NodeType.STAIR_TOP    -> "STAIR TOP"    to Color(0xFF66BB6A)
-                        NodeType.STAIR_BOTTOM -> "STAIR BOTTOM" to Color(0xFFEF5350)
-                        NodeType.WAYPOINT     -> "WAYPOINT"     to Color.Gray
+                        NodeType.DOOR         -> "DOOR"       to Color(0xFFFFA726)
+                        NodeType.STAIR_TOP    -> "STAIR TOP"  to Color(0xFF66BB6A)
+                        NodeType.STAIR_MIDDLE -> "STAIR MID"  to Color(0xFF42A5F5)
+                        NodeType.STAIR_BOTTOM -> "STAIR BTM"  to Color(0xFFEF5350)
+                        NodeType.WAYPOINT     -> "WAYPOINT"   to Color.Gray
                     }
                     Text(
                         typeLabel,
@@ -243,6 +244,7 @@ private fun MarkWaypointCard(
                 }
             }
             Spacer(Modifier.height(6.dp))
+            // Row 1: Door (full width)
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 modifier              = Modifier.fillMaxWidth()
@@ -255,6 +257,13 @@ private fun MarkWaypointCard(
                     activeColor = Color(0xFFFFA726),
                     onClick     = { onMarkAs(NodeType.DOOR) }
                 )
+            }
+            Spacer(Modifier.height(4.dp))
+            // Row 2: Stair Top / Stair Mid / Stair Bottom
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier              = Modifier.fillMaxWidth()
+            ) {
                 NodeTypeButton(
                     label       = "Stair ↑",
                     icon        = { Icon(Icons.Default.ArrowUpward, contentDescription = null, modifier = Modifier.size(14.dp)) },
@@ -262,6 +271,14 @@ private fun MarkWaypointCard(
                     isActive    = lastNodeType == NodeType.STAIR_TOP,
                     activeColor = Color(0xFF66BB6A),
                     onClick     = { onMarkAs(NodeType.STAIR_TOP) }
+                )
+                NodeTypeButton(
+                    label       = "Stair ↕",
+                    icon        = { Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(14.dp)) },
+                    enabled     = lastRecordedNode != null,
+                    isActive    = lastNodeType == NodeType.STAIR_MIDDLE,
+                    activeColor = Color(0xFF42A5F5),
+                    onClick     = { onMarkAs(NodeType.STAIR_MIDDLE) }
                 )
                 NodeTypeButton(
                     label       = "Stair ↓",
