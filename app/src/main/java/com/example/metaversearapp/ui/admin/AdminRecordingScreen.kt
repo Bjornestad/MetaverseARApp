@@ -21,6 +21,7 @@ import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
+import com.google.ar.core.Anchor
 import com.google.ar.core.Anchor.CloudAnchorState
 import com.google.ar.core.Config
 import com.google.ar.core.GeospatialPose
@@ -33,8 +34,13 @@ import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.rememberEngine
+import io.github.sceneview.ar.node.AnchorNode
+import io.github.sceneview.math.Position
+import io.github.sceneview.math.Color as SceneViewColor
+import io.github.sceneview.node.CubeNode
 import io.github.sceneview.rememberMaterialLoader
 import io.github.sceneview.rememberModelLoader
+import dev.romainguy.kotlin.math.Float3
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -107,6 +113,8 @@ internal fun AdminRecordingScreen(
     var arSession        by remember { mutableStateOf<Session?>(null) }
     var lastCameraPose   by remember { mutableStateOf<Pose?>(null) }
     var cloudHostState   by remember { mutableStateOf<HostState>(HostState.Idle) }
+    // Hosted cloud anchor visuals — kept alive (not detached) so they render in the scene
+    var cloudAnchorVisuals by remember { mutableStateOf<List<Anchor>>(emptyList()) }
 
     // ── Door → QR link picker state ────────────────────────────────────────────
     var showDoorLinkDialog by remember { mutableStateOf(false) }
@@ -280,11 +288,12 @@ internal fun AdminRecordingScreen(
 
         val anchor = session.createAnchor(pose)
         session.hostCloudAnchorAsync(anchor, 1) { cloudId, state ->
-            anchor.detach()
             when (state) {
                 CloudAnchorState.SUCCESS -> {
-                    cloudHostState = HostState.Hosted(cloudId)
-                    statusMsg      = "Hosted ✓  …${cloudId.takeLast(8)}"
+                    cloudHostState     = HostState.Hosted(cloudId)
+                    statusMsg          = "Hosted ✓  …${cloudId.takeLast(8)}"
+                    // Keep anchor alive so it renders as a visual marker in the scene
+                    cloudAnchorVisuals = cloudAnchorVisuals + anchor
                     lastRecordedNode?.let { node ->
                         scope.launch {
                             val updated = node.copy(cloudAnchorId = cloudId)
@@ -294,6 +303,7 @@ internal fun AdminRecordingScreen(
                     }
                 }
                 else -> {
+                    anchor.detach()
                     cloudHostState = HostState.Failed(state.name)
                     statusMsg      = "Hosting failed: ${state.name}"
                 }
@@ -465,7 +475,44 @@ internal fun AdminRecordingScreen(
                         } // end if TRACKING
                     } // end if earth != null
                 }
-            ) { /* No AR nodes rendered in admin mode */ }
+            ) {
+                // ── Cloud anchor visual markers ────────────────────────────────
+                val anchorMarkerMaterial = remember(materialLoader) {
+                    materialLoader.createColorInstance(
+                        color = SceneViewColor(0.0f, 0.9f, 0.85f, 0.95f), // teal
+                        metallic = 0.0f, roughness = 0.4f, reflectance = 0.6f
+                    )
+                }
+                val anchorArrowMaterial = remember(materialLoader) {
+                    materialLoader.createColorInstance(
+                        color = SceneViewColor(1.0f, 0.6f, 0.0f, 1.0f), // amber arrow
+                        metallic = 0.0f, roughness = 0.5f, reflectance = 0.5f
+                    )
+                }
+                cloudAnchorVisuals.forEach { anchor ->
+                    AnchorNode(anchor = anchor) {
+                        // Teal diamond-shaped marker at the anchor position
+                        CubeNode(
+                            size             = Float3(0.15f, 0.15f, 0.15f),
+                            center           = Position(0f, 0f, 0f),
+                            materialInstance = anchorMarkerMaterial
+                        )
+                        // Amber arrow pointing in the camera's forward direction (-Z)
+                        // so you can see which way you were facing when the anchor was hosted
+                        CubeNode(
+                            size             = Float3(0.05f, 0.05f, 0.4f),
+                            center           = Position(0f, 0f, -0.3f),
+                            materialInstance = anchorArrowMaterial
+                        )
+                        // Arrow tip
+                        CubeNode(
+                            size             = Float3(0.12f, 0.12f, 0.08f),
+                            center           = Position(0f, 0f, -0.54f),
+                            materialInstance = anchorArrowMaterial
+                        )
+                    }
+                }
+            }
         } else {
             Box(
                 modifier         = Modifier.fillMaxSize().background(Color(0xFF0A0A0A)),
