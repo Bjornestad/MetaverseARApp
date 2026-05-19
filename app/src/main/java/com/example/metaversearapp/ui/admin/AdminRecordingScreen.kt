@@ -401,7 +401,7 @@ internal fun AdminRecordingScreen(
                         // vertically stacked corridors on different floors.
                         val nearExisting = preloadedNodes.firstOrNull { existing ->
                             existing.id != lastRecordedNode?.id &&
-                            kotlin.math.abs(existing.alt - corrAlt) <= 3.0 &&
+                            kotlin.math.abs(existing.alt - corrAlt) <= 1.5 &&
                             NavGraphPathfinder.haversine(
                                 corrLat, corrLon, existing.lat, existing.lon
                             ) < MIN_NODE_DISTANCE_M
@@ -465,7 +465,7 @@ internal fun AdminRecordingScreen(
                                     val bridges = preloadedNodes.filter { existing ->
                                         existing.id != newNode.id &&
                                         existing.id != prevNode?.id &&
-                                        kotlin.math.abs(existing.alt - newNode.alt) <= 3.0 &&
+                                        kotlin.math.abs(existing.alt - newNode.alt) <= 1.5 &&
                                         NavGraphPathfinder.haversine(
                                             newNode.lat, newNode.lon, existing.lat, existing.lon
                                         ) <= SEGMENT_SNAP_RADIUS_M

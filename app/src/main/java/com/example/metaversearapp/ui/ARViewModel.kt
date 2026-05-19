@@ -543,6 +543,19 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         }
     }
 
+    /**
+     * Called when the user has wandered off the current route.
+     * Updates the status text immediately, then re-runs A* from the
+     * user's current corrected position to the same destination.
+     * Safe to call from any thread — delegates to [computeDestinationPath]
+     * which dispatches its DB work onto [Dispatchers.IO] internally.
+     */
+    fun requestReroute() {
+        if (selectedDestination == null) return
+        statusText = "Off route — recalculating…"
+        computeDestinationPath()
+    }
+
     fun toggleScanning() {
         isScanning = !isScanning
         statusText = if (isScanning) "Scanning QR to improve accuracy..." else "Ready"

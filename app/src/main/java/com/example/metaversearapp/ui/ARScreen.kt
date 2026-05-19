@@ -148,6 +148,7 @@ fun ARScreen(
     var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
     var lastPathDropTime   by remember { mutableLongStateOf(0L) }
+    var lastRerouteTime    by remember { mutableLongStateOf(0L) }
     val earthRef   = remember { mutableStateOf<Earth?>(null) }
     val sessionRef = remember { mutableStateOf<Session?>(null) }
     val resolvedAnchorIds = remember { mutableSetOf<String>() }
@@ -506,6 +507,28 @@ fun ARScreen(
                                 }
                             }
 
+                            // ── Off-path re-routing ──────────────────────────────
+                            // If the user is more than 8 m from every remaining
+                            // waypoint, they've gone off-route.  Recalculate A*
+                            // from their current corrected position.
+                            // 10 s cooldown prevents hammering the pathfinder while
+                            // the user is turning around or GPS is briefly noisy.
+                            // Guard: skip when near arrival (size == 1) to avoid
+                            // re-routing right as the destination comes into view.
+                            if (viewModel.selectedDestination != null &&
+                                !viewModel.showArrivalBanner &&
+                                destPathProgress.size > 1 &&
+                                (now - lastRerouteTime) > 10_000L
+                            ) {
+                                val minDist = destPathProgress.minOf { node ->
+                                    NavGraphPathfinder.haversine(userLat, userLon, node.lat, node.lon)
+                                }
+                                if (minDist > 8.0) {
+                                    lastRerouteTime = now
+                                    scope.launch { viewModel.requestReroute() }
+                                }
+                            }
+
                             val currentTime = System.currentTimeMillis()
                             if (viewModel.isScanning && (currentTime - lastProcessingTime > 1000)) {
                                 if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
@@ -723,7 +746,8 @@ fun ARScreen(
                 viewModel            = viewModel,
                 showDebug            = showDebug,
                 remainingWaypoints   = if (destPathProgress.size > 1) destPathProgress.size - 1 else 0,
-                nextWaypointBearing  = nextWaypointBearing
+                nextWaypointBearing  = nextWaypointBearing,
+                remainingPath        = destPathProgress
             )
 
             // Debug + Admin buttons — bottom-right, above the control card

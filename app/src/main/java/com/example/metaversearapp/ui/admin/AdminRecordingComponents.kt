@@ -103,24 +103,35 @@ internal fun RecordingTopHud(
                     thickness = 1.dp,
                     color     = Color.White.copy(alpha = 0.08f)
                 )
-                Text(
-                    String.format(Locale.US, "Lat: %.6f", geospatialPose.latitude  - latOffset),
-                    color      = Color(0xFF64FFDA).copy(alpha = 0.8f),
-                    fontSize   = 10.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    String.format(Locale.US, "Lon: %.6f", geospatialPose.longitude - lonOffset),
-                    color      = Color(0xFF64FFDA).copy(alpha = 0.8f),
-                    fontSize   = 10.sp,
-                    fontFamily = FontFamily.Monospace
-                )
-                Text(
-                    String.format(Locale.US, "Alt: %.1fm", geospatialPose.altitude  - altOffset),
-                    color      = Color(0xFF64FFDA).copy(alpha = 0.8f),
-                    fontSize   = 10.sp,
-                    fontFamily = FontFamily.Monospace
-                )
+                val gpsColor = Color(0xFF64FFDA).copy(alpha = 0.8f)
+                // Row 1: Lat | Lon
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        String.format(Locale.US, "Lat %.6f", geospatialPose.latitude  - latOffset),
+                        color = gpsColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        String.format(Locale.US, "Lon %.6f", geospatialPose.longitude - lonOffset),
+                        color = gpsColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    )
+                }
+                // Row 2: Alt | Heading
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        String.format(Locale.US, "Alt %.1fm", geospatialPose.altitude - altOffset),
+                        color = gpsColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        String.format(Locale.US, "Hdg %.1f°", geospatialPose.heading),
+                        color = gpsColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
     }

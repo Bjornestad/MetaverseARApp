@@ -13,7 +13,7 @@ internal var adminGistSyncDone            = false
 
 internal const val MIN_NODE_DISTANCE_M    = 1.5      // metres between auto-captured nodes
 internal const val CAPTURE_INTERVAL_MS    = 2_000L   // max capture rate
-internal const val STAIR_CONNECT_RADIUS_M = 20.0     // max horizontal metres to auto-link stair endpoints
+internal const val STAIR_CONNECT_RADIUS_M = 10.0     // max horizontal metres to auto-link stair endpoints
 internal const val QR_LINK_RADIUS_M       = 12.0     // max metres to auto-link a DOOR node to a nearby QR room anchor
 internal const val SEGMENT_SNAP_RADIUS_M  = 5.0      // max metres to auto-bridge a new node to an existing one during recording
 

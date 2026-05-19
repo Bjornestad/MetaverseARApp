@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
@@ -41,9 +42,10 @@ import kotlin.math.*
 @Composable
 fun ARUiOverlay(
     viewModel           : ARViewModel,
-    showDebug           : Boolean = false,
-    remainingWaypoints  : Int     = 0,
-    nextWaypointBearing : Double? = null
+    showDebug           : Boolean       = false,
+    remainingWaypoints  : Int           = 0,
+    nextWaypointBearing : Double?       = null,
+    remainingPath       : List<NavNode> = emptyList()
 ) {
     // Dialog lives outside the positioned columns so it can cover the full screen
     DestinationSelector(viewModel)
@@ -93,6 +95,12 @@ fun ARUiOverlay(
                         .padding(horizontal = 16.dp)
                         .fillMaxWidth()
                 )
+            }
+
+            // ── Floor change warning ─────────────────────────────────────────
+            if (remainingPath.size >= 2) {
+                Spacer(modifier = Modifier.height(4.dp))
+                FloorChangeWarning(remainingPath = remainingPath)
             }
 
             // ── Debug-only controls ──────────────────────────────────────────
@@ -318,6 +326,59 @@ fun ARUiOverlay(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Amber warning card shown when a floor transition is detected within the
+ * first [lookAhead] nodes of [remainingPath].  Shows the direction (↑/↓) and
+ * target floor number.  Renders nothing if no transition is imminent.
+ */
+@Composable
+fun FloorChangeWarning(
+    remainingPath : List<NavNode>,
+    lookAhead     : Int = 10
+) {
+    // Find the first floor transition in the look-ahead window
+    val segment    = remainingPath.take(lookAhead + 1)
+    val transition = segment.zipWithNext().firstOrNull { (a, b) -> a.floor != b.floor } ?: return
+
+    val targetFloor     = transition.second.floor
+    val currentFloorInt = transition.first.floor.toIntOrNull()
+    val targetFloorInt  = targetFloor.toIntOrNull()
+    val isGoingUp = when {
+        currentFloorInt != null && targetFloorInt != null -> targetFloorInt > currentFloorInt
+        else -> true
+    }
+
+    Card(
+        modifier = Modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF1A1200).copy(alpha = 0.92f)
+        ),
+        border = BorderStroke(1.dp, Color(0xFFFFB300).copy(alpha = 0.8f))
+    ) {
+        Row(
+            modifier              = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                imageVector        = if (isGoingUp) Icons.Default.ArrowUpward
+                                     else Icons.Default.ArrowDownward,
+                contentDescription = null,
+                tint               = Color(0xFFFFB300),
+                modifier           = Modifier.size(18.dp)
+            )
+            Text(
+                text  = if (isGoingUp) "Head up  ·  floor $targetFloor"
+                        else           "Head down  ·  floor $targetFloor",
+                color = Color(0xFFFFCC80),
+                style = MaterialTheme.typography.labelMedium
+            )
         }
     }
 }
