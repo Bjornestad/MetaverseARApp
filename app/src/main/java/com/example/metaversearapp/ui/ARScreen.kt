@@ -409,7 +409,12 @@ fun ARScreen(
                     onSessionUpdated = { session, frame ->
                         val earth = session.earth
                         earthRef.value = earth
-                        sessionRef.value = session
+                        // Only write once (null → Session). session.earth returns a new wrapper
+                        // each frame (see earthRef comment above), and the SceneView library may
+                        // do the same for the Session itself.  Writing every frame would fire a
+                        // state change 60×/s and restart every LaunchedEffect that uses
+                        // sessionRef.value as a key, clearing destArrows before they can render.
+                        if (sessionRef.value == null) sessionRef.value = session
 
                         viewModel.updateGeospatialState(earth)
 
