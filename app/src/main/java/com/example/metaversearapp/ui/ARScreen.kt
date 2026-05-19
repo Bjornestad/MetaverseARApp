@@ -182,11 +182,16 @@ fun ARScreen(
     // When VPS is tracking, find the nearest unresolved cloud-anchor node within 15 m
     // and resolve it. A successful resolve calibrates the lat/lon offsets via the
     // geospatial pose of the resolved anchor (cm-accurate, unlike GPS).
+    //
+    // earthRef.value is intentionally NOT a key here: session.earth returns a new
+    // Java wrapper object on every ARCore frame, which would fire a state change
+    // 60×/s and restart this effect continuously.  earthTrackingState covers the
+    // only transitions we care about (STOPPED → TRACKING), and earthRef.value is
+    // read inside the body where it is always populated by the time tracking is active.
     LaunchedEffect(
         viewModel.earthTrackingState,
         viewModel.navNodes,
         viewModel.isResolvingCloudAnchor,
-        earthRef.value,
         sessionRef.value
     ) {
         if (viewModel.earthTrackingState != TrackingState.TRACKING) return@LaunchedEffect
@@ -240,7 +245,10 @@ fun ARScreen(
 
     // Full rebuild whenever the path, tracking state, or local AR reference changes.
     // Individual arrow cleanup is handled per-proximity in onSessionUpdated.
-    LaunchedEffect(viewModel.destinationPathNodes, earthRef.value, viewModel.earthTrackingState, viewModel.localArRef, sessionRef.value) {
+    //
+    // earthRef.value is intentionally NOT a key: see the cloud-anchor LaunchedEffect
+    // above for a full explanation.  earthRef is read inside the body only.
+    LaunchedEffect(viewModel.destinationPathNodes, viewModel.earthTrackingState, viewModel.localArRef, sessionRef.value) {
         val earth    = earthRef.value
         val path     = viewModel.destinationPathNodes
         val localRef = viewModel.localArRef
@@ -280,8 +288,8 @@ fun ARScreen(
     var endPinAnchor     by remember { mutableStateOf<Anchor?>(null) }
     var testCrumbAnchors by remember { mutableStateOf<List<Anchor>>(emptyList()) }
 
-    // Create / update start pin anchor whenever the pin or earth changes
-    LaunchedEffect(viewModel.startPin, earthRef.value, viewModel.earthTrackingState) {
+    // Create / update start pin anchor whenever the pin or tracking state changes
+    LaunchedEffect(viewModel.startPin, viewModel.earthTrackingState) {
         startPinAnchor?.detach()
         startPinAnchor = null
         val earth = earthRef.value ?: return@LaunchedEffect
@@ -291,7 +299,7 @@ fun ARScreen(
     }
 
     // Create / update end pin anchor
-    LaunchedEffect(viewModel.endPin, earthRef.value, viewModel.earthTrackingState) {
+    LaunchedEffect(viewModel.endPin, viewModel.earthTrackingState) {
         endPinAnchor?.detach()
         endPinAnchor = null
         val earth = earthRef.value ?: return@LaunchedEffect
@@ -301,7 +309,7 @@ fun ARScreen(
     }
 
     // Create evenly-spaced directional arrow anchors along the A* test path
-    LaunchedEffect(viewModel.testPathNodes, earthRef.value, viewModel.earthTrackingState, viewModel.localArRef, sessionRef.value) {
+    LaunchedEffect(viewModel.testPathNodes, viewModel.earthTrackingState, viewModel.localArRef, sessionRef.value) {
         testCrumbAnchors.forEach { it.detach() }
         testCrumbAnchors = emptyList()
         val path     = viewModel.testPathNodes
@@ -349,7 +357,6 @@ fun ARScreen(
         viewModel.lonOffset,
         viewModel.altOffset,
         viewModel.earthTrackingState,
-        earthRef.value,
         viewModel.localArRef,
         sessionRef.value
     ) {
