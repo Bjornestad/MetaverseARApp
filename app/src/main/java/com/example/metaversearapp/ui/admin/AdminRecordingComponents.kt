@@ -1,5 +1,6 @@
 package com.example.metaversearapp.ui.admin
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -10,10 +11,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -28,121 +29,96 @@ import java.util.Locale
 // ── Top HUD ────────────────────────────────────────────────────────────────────
 
 /**
- * The full top HUD stack: recording indicator bar, status message, and VPS readout.
+ * Compact single-card HUD: REC dot, status text, node counter, VPS dot,
+ * and (when tracking + calibrated) lat / lon / alt on separate lines.
  */
 @Composable
 internal fun RecordingTopHud(
-    isRecording:       Boolean,
-    sessionNodes:      Int,
-    sessionEdges:      Int,
-    statusMsg:         String,
-    geospatialPose:    GeospatialPose?,
-    earthTrackingState: TrackingState,
-    isCalibrated:      Boolean,
-    latOffset:         Double,
-    lonOffset:         Double,
-    altOffset:         Double,
-) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        RecordingIndicatorCard(isRecording, sessionNodes, sessionEdges)
-        StatusMessageCard(statusMsg)
-        if (geospatialPose != null) {
-            VpsReadoutCard(geospatialPose, earthTrackingState, isCalibrated, latOffset, lonOffset, altOffset)
-        }
-    }
-}
-
-/** Red dot + REC/STANDBY label, plus node/edge counters. */
-@Composable
-private fun RecordingIndicatorCard(isRecording: Boolean, sessionNodes: Int, sessionEdges: Int) {
-    Card(
-        colors   = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.75f)),
-        shape    = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Row(
-            modifier              = Modifier.padding(12.dp).fillMaxWidth(),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(10.dp)
-                        .background(
-                            color = if (isRecording) Color.Red else Color.Gray,
-                            shape = CircleShape
-                        )
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(
-                    if (isRecording) "REC" else "STANDBY",
-                    color      = if (isRecording) Color.Red else Color.Gray,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace
-                )
-            }
-            Text(
-                "Nodes: $sessionNodes   Edges: $sessionEdges",
-                color      = Color(0xFF64FFDA),
-                fontFamily = FontFamily.Monospace,
-                fontSize   = 12.sp
-            )
-        }
-    }
-}
-
-/** One-line status text card. */
-@Composable
-private fun StatusMessageCard(statusMsg: String) {
-    Card(
-        colors   = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f)),
-        shape    = RoundedCornerShape(8.dp),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Text(
-            statusMsg,
-            modifier = Modifier.padding(10.dp),
-            color    = Color.White,
-            fontSize = 13.sp
-        )
-    }
-}
-
-/** VPS tracking state + calibrated lat/lon/alt readout. */
-@Composable
-private fun VpsReadoutCard(
-    pose:               GeospatialPose,
+    isRecording:        Boolean,
+    sessionNodes:       Int,
+    sessionEdges:       Int,
+    statusMsg:          String,
+    geospatialPose:     GeospatialPose?,
     earthTrackingState: TrackingState,
     isCalibrated:       Boolean,
     latOffset:          Double,
     lonOffset:          Double,
     altOffset:          Double,
 ) {
-    val trackColor = if (earthTrackingState == TrackingState.TRACKING) Color(0xFF64FFDA) else Color.Red
+    val vpsColor = when {
+        earthTrackingState == TrackingState.TRACKING && isCalibrated -> Color(0xFF4CAF50)
+        earthTrackingState == TrackingState.TRACKING                  -> Color(0xFFFFCC80)
+        else                                                          -> Color(0xFFFF5252)
+    }
+
     Card(
-        colors   = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.7f)),
-        shape    = RoundedCornerShape(8.dp),
+        colors   = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.75f)),
+        shape    = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Text(
-                "VPS: ${earthTrackingState.name}",
-                color      = trackColor,
-                fontSize   = 11.sp,
-                fontFamily = FontFamily.Monospace
-            )
-            if (isCalibrated) {
+        Column(
+            modifier            = Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            // ── Main status row ──────────────────────────────────────────────
+            Row(
+                modifier             = Modifier.fillMaxWidth(),
+                verticalAlignment    = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                // REC / STANDBY dot
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(
+                            color = if (isRecording) Color.Red else Color.Gray,
+                            shape = CircleShape
+                        )
+                )
+                // Status message (expands to fill)
                 Text(
-                    String.format(
-                        Locale.US,
-                        "%.6f, %.6f  alt %.1fm",
-                        pose.latitude  - latOffset,
-                        pose.longitude - lonOffset,
-                        pose.altitude  - altOffset
-                    ),
-                    color      = Color.White,
-                    fontSize   = 11.sp,
+                    statusMsg,
+                    modifier  = Modifier.weight(1f),
+                    color     = Color.White,
+                    fontSize  = 12.sp,
+                    maxLines  = 1
+                )
+                // Node / edge counter
+                Text(
+                    "N:$sessionNodes E:$sessionEdges",
+                    color      = Color(0xFF64FFDA),
+                    fontSize   = 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                // VPS status dot
+                Surface(shape = CircleShape, color = vpsColor, modifier = Modifier.size(8.dp)) {}
+            }
+
+            // ── GPS readout (only when tracking and calibrated) ──────────────
+            if (geospatialPose != null &&
+                earthTrackingState == TrackingState.TRACKING &&
+                isCalibrated
+            ) {
+                HorizontalDivider(
+                    thickness = 1.dp,
+                    color     = Color.White.copy(alpha = 0.08f)
+                )
+                Text(
+                    String.format(Locale.US, "Lat: %.6f", geospatialPose.latitude  - latOffset),
+                    color      = Color(0xFF64FFDA).copy(alpha = 0.8f),
+                    fontSize   = 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    String.format(Locale.US, "Lon: %.6f", geospatialPose.longitude - lonOffset),
+                    color      = Color(0xFF64FFDA).copy(alpha = 0.8f),
+                    fontSize   = 10.sp,
+                    fontFamily = FontFamily.Monospace
+                )
+                Text(
+                    String.format(Locale.US, "Alt: %.1fm", geospatialPose.altitude  - altOffset),
+                    color      = Color(0xFF64FFDA).copy(alpha = 0.8f),
+                    fontSize   = 10.sp,
                     fontFamily = FontFamily.Monospace
                 )
             }
@@ -153,8 +129,8 @@ private fun VpsReadoutCard(
 // ── Bottom controls panel ──────────────────────────────────────────────────────
 
 /**
- * Scrollable bottom panel: floor selector, mark-waypoint card, scan QR,
- * start/stop recording, host cloud anchor, and finish session.
+ * Compact bottom panel: floor selector, node-type markers, and a single row
+ * of icon buttons for QR scan / record / cloud anchor / finish.
  */
 @Composable
 internal fun RecordingControlsPanel(
@@ -178,14 +154,20 @@ internal fun RecordingControlsPanel(
     ) {
         FloorSelectorCard(currentFloor, onFloorChange)
         MarkWaypointCard(lastRecordedNode, lastNodeType, onMarkAs)
-        ScanQrButton(isScanning, onScanToggle)
-        RecordToggleButton(isRecording, onRecordToggle)
-        HostCloudAnchorButton(cloudHostState, canHostAnchor, onHostCloudAnchor)
-        FinishSessionButton(onFinished)
+        RecordingActionBar(
+            isScanning        = isScanning,
+            onScanToggle      = onScanToggle,
+            isRecording       = isRecording,
+            onRecordToggle    = onRecordToggle,
+            cloudHostState    = cloudHostState,
+            canHostAnchor     = canHostAnchor,
+            onHostCloudAnchor = onHostCloudAnchor,
+            onFinished        = onFinished
+        )
     }
 }
 
-/** Teal chip row for selecting the current floor. */
+/** Compact single-row floor selector. */
 @Composable
 private fun FloorSelectorCard(currentFloor: String, onFloorChange: (String) -> Unit) {
     Card(
@@ -193,261 +175,208 @@ private fun FloorSelectorCard(currentFloor: String, onFloorChange: (String) -> U
         shape    = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
+        Row(
+            modifier              = Modifier
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .fillMaxWidth(),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
             Text("Floor", color = Color.Gray, fontSize = 11.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                FLOOR_OPTIONS.forEach { fl ->
-                    FilterChip(
-                        selected = currentFloor == fl,
-                        onClick  = { onFloorChange(fl) },
-                        label    = { Text(fl, fontSize = 12.sp) },
-                        colors   = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = Color(0xFF64FFDA),
-                            selectedLabelColor     = Color.Black
+            Spacer(Modifier.width(2.dp))
+            FLOOR_OPTIONS.forEach { fl ->
+                val selected = currentFloor == fl
+                Surface(
+                    onClick = { onFloorChange(fl) },
+                    shape   = RoundedCornerShape(6.dp),
+                    color   = if (selected) Color(0xFF64FFDA) else Color.White.copy(alpha = 0.08f),
+                    modifier = Modifier.size(width = 30.dp, height = 26.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            fl,
+                            fontSize   = 10.sp,
+                            color      = if (selected) Color.Black else Color.White.copy(alpha = 0.7f),
+                            fontFamily = FontFamily.Monospace
                         )
-                    )
+                    }
                 }
             }
         }
     }
 }
 
-/** Door / Stair-top / Stair-middle / Stair-bottom marker buttons, with active-type badge. */
+/** Compact single-row waypoint marker — label, active-type badge, 4 icon buttons. */
 @Composable
 private fun MarkWaypointCard(
     lastRecordedNode: NavNode?,
     lastNodeType:     NodeType,
     onMarkAs:         (NodeType) -> Unit,
 ) {
+    val (typeLabel, typeColor) = when (lastNodeType) {
+        NodeType.DOOR         -> "DOOR" to Color(0xFFFFA726)
+        NodeType.STAIR_TOP    -> "↑"    to Color(0xFF66BB6A)
+        NodeType.STAIR_MIDDLE -> "↕"    to Color(0xFF42A5F5)
+        NodeType.STAIR_BOTTOM -> "↓"    to Color(0xFFEF5350)
+        NodeType.WAYPOINT     -> "WPT"  to Color.Gray
+    }
+
     Card(
         colors   = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
         shape    = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Column(modifier = Modifier.padding(10.dp)) {
-            Row(
-                modifier              = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment     = Alignment.CenterVertically
+        Row(
+            modifier              = Modifier
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .fillMaxWidth(),
+            verticalAlignment     = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text("Mark", color = Color.Gray, fontSize = 11.sp)
+            if (lastRecordedNode != null) {
+                Text(
+                    typeLabel,
+                    color      = typeColor,
+                    fontSize   = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Spacer(Modifier.weight(1f))
+            NodeIconButton(Icons.Default.DoorFront,    lastRecordedNode != null, lastNodeType == NodeType.DOOR,         Color(0xFFFFA726)) { onMarkAs(NodeType.DOOR) }
+            NodeIconButton(Icons.Default.ArrowUpward,  lastRecordedNode != null, lastNodeType == NodeType.STAIR_TOP,    Color(0xFF66BB6A)) { onMarkAs(NodeType.STAIR_TOP) }
+            NodeIconButton(Icons.Default.SwapVert,     lastRecordedNode != null, lastNodeType == NodeType.STAIR_MIDDLE, Color(0xFF42A5F5)) { onMarkAs(NodeType.STAIR_MIDDLE) }
+            NodeIconButton(Icons.Default.ArrowDownward,lastRecordedNode != null, lastNodeType == NodeType.STAIR_BOTTOM, Color(0xFFEF5350)) { onMarkAs(NodeType.STAIR_BOTTOM) }
+        }
+    }
+}
+
+@Composable
+private fun NodeIconButton(
+    icon:     ImageVector,
+    enabled:  Boolean,
+    isActive: Boolean,
+    color:    Color,
+    onClick:  () -> Unit,
+) {
+    OutlinedIconButton(
+        onClick  = onClick,
+        enabled  = enabled,
+        modifier = Modifier.size(36.dp),
+        colors   = IconButtonDefaults.outlinedIconButtonColors(
+            contentColor         = color,
+            disabledContentColor = color.copy(alpha = 0.3f)
+        ),
+        border = BorderStroke(1.dp, if (isActive) color else color.copy(alpha = 0.35f))
+    ) {
+        Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+    }
+}
+
+/**
+ * Single-row icon button bar: QR scan | record toggle | host anchor | finish.
+ * Replaces four separate full-width buttons to reclaim vertical screen space.
+ */
+@Composable
+private fun RecordingActionBar(
+    isScanning:        Boolean,
+    onScanToggle:      () -> Unit,
+    isRecording:       Boolean,
+    onRecordToggle:    () -> Unit,
+    cloudHostState:    HostState,
+    canHostAnchor:     Boolean,
+    onHostCloudAnchor: () -> Unit,
+    onFinished:        () -> Unit,
+) {
+    Card(
+        colors   = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
+        shape    = RoundedCornerShape(12.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier              = Modifier
+                .padding(horizontal = 8.dp, vertical = 6.dp)
+                .fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment     = Alignment.CenterVertically
+        ) {
+            // ── QR scan ──────────────────────────────────────────────────────
+            val scanColor = if (isScanning) Color(0xFFFF6B35) else Color(0xFF1E88E5)
+            OutlinedIconButton(
+                onClick = onScanToggle,
+                colors  = IconButtonDefaults.outlinedIconButtonColors(contentColor = scanColor),
+                border  = BorderStroke(1.dp, scanColor.copy(alpha = 0.7f))
             ) {
-                Text("Mark last waypoint", color = Color.Gray, fontSize = 11.sp)
-                if (lastRecordedNode != null) {
-                    val (typeLabel, typeColor) = when (lastNodeType) {
-                        NodeType.DOOR         -> "DOOR"       to Color(0xFFFFA726)
-                        NodeType.STAIR_TOP    -> "STAIR TOP"  to Color(0xFF66BB6A)
-                        NodeType.STAIR_MIDDLE -> "STAIR MID"  to Color(0xFF42A5F5)
-                        NodeType.STAIR_BOTTOM -> "STAIR BTM"  to Color(0xFFEF5350)
-                        NodeType.WAYPOINT     -> "WAYPOINT"   to Color.Gray
-                    }
-                    Text(
-                        typeLabel,
-                        color      = typeColor,
-                        fontSize   = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
+                Icon(
+                    if (isScanning) Icons.Default.Close else Icons.Default.QrCodeScanner,
+                    contentDescription = if (isScanning) "Cancel scan" else "Scan QR"
+                )
+            }
+
+            // ── Record toggle ────────────────────────────────────────────────
+            val recColor = if (isRecording) Color.Red else Color(0xFF64FFDA)
+            OutlinedIconButton(
+                onClick = onRecordToggle,
+                colors  = IconButtonDefaults.outlinedIconButtonColors(contentColor = recColor),
+                border  = BorderStroke(1.dp, recColor.copy(alpha = 0.7f))
+            ) {
+                Icon(
+                    if (isRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
+                    contentDescription = if (isRecording) "Stop" else "Record"
+                )
+            }
+
+            // ── Host cloud anchor ────────────────────────────────────────────
+            val anchorColor = when (cloudHostState) {
+                is HostState.Idle    -> Color(0xFF80CBC4)
+                is HostState.Hosting -> Color(0xFFFFCC80)
+                is HostState.Hosted  -> Color(0xFF69F0AE)
+                is HostState.Failed  -> Color(0xFFFF8A65)
+            }
+            OutlinedIconButton(
+                onClick  = onHostCloudAnchor,
+                enabled  = canHostAnchor ||
+                           cloudHostState is HostState.Hosted ||
+                           cloudHostState is HostState.Failed,
+                colors   = IconButtonDefaults.outlinedIconButtonColors(
+                    contentColor         = anchorColor,
+                    disabledContentColor = anchorColor.copy(alpha = 0.35f)
+                ),
+                border   = BorderStroke(
+                    1.dp,
+                    if (canHostAnchor || cloudHostState !is HostState.Idle)
+                        anchorColor.copy(alpha = 0.7f)
+                    else
+                        anchorColor.copy(alpha = 0.25f)
+                )
+            ) {
+                if (cloudHostState is HostState.Hosting) {
+                    CircularProgressIndicator(
+                        color       = anchorColor,
+                        modifier    = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(
+                        Icons.Default.CloudUpload,
+                        contentDescription = "Host cloud anchor",
+                        modifier           = Modifier.size(20.dp)
                     )
                 }
             }
-            Spacer(Modifier.height(6.dp))
-            // Row 1: Door (full width)
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier              = Modifier.fillMaxWidth()
+
+            // ── Finish session ───────────────────────────────────────────────
+            OutlinedIconButton(
+                onClick = onFinished,
+                colors  = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color.Gray),
+                border  = BorderStroke(1.dp, Color.Gray.copy(alpha = 0.5f))
             ) {
-                NodeTypeButton(
-                    label       = "Door",
-                    icon        = { Icon(Icons.Default.DoorFront, contentDescription = null, modifier = Modifier.size(14.dp)) },
-                    enabled     = lastRecordedNode != null,
-                    isActive    = lastNodeType == NodeType.DOOR,
-                    activeColor = Color(0xFFFFA726),
-                    onClick     = { onMarkAs(NodeType.DOOR) }
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-            // Row 2: Stair Top / Stair Mid / Stair Bottom
-            Row(
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                modifier              = Modifier.fillMaxWidth()
-            ) {
-                NodeTypeButton(
-                    label       = "Stair ↑",
-                    icon        = { Icon(Icons.Default.ArrowUpward, contentDescription = null, modifier = Modifier.size(14.dp)) },
-                    enabled     = lastRecordedNode != null,
-                    isActive    = lastNodeType == NodeType.STAIR_TOP,
-                    activeColor = Color(0xFF66BB6A),
-                    onClick     = { onMarkAs(NodeType.STAIR_TOP) }
-                )
-                NodeTypeButton(
-                    label       = "Stair ↕",
-                    icon        = { Icon(Icons.Default.SwapVert, contentDescription = null, modifier = Modifier.size(14.dp)) },
-                    enabled     = lastRecordedNode != null,
-                    isActive    = lastNodeType == NodeType.STAIR_MIDDLE,
-                    activeColor = Color(0xFF42A5F5),
-                    onClick     = { onMarkAs(NodeType.STAIR_MIDDLE) }
-                )
-                NodeTypeButton(
-                    label       = "Stair ↓",
-                    icon        = { Icon(Icons.Default.ArrowDownward, contentDescription = null, modifier = Modifier.size(14.dp)) },
-                    enabled     = lastRecordedNode != null,
-                    isActive    = lastNodeType == NodeType.STAIR_BOTTOM,
-                    activeColor = Color(0xFFEF5350),
-                    onClick     = { onMarkAs(NodeType.STAIR_BOTTOM) }
-                )
+                Icon(Icons.Default.Check, contentDescription = "Finish session")
             }
         }
     }
 }
-
-/** A single outlined marker button (Door / Stair ↑ / Stair ↓). */
-@Composable
-private fun RowScope.NodeTypeButton(
-    label:       String,
-    icon:        @Composable () -> Unit,
-    enabled:     Boolean,
-    isActive:    Boolean,
-    activeColor: Color,
-    onClick:     () -> Unit,
-) {
-    OutlinedButton(
-        onClick        = onClick,
-        enabled        = enabled,
-        modifier       = Modifier.weight(1f),
-        shape          = RoundedCornerShape(8.dp),
-        colors         = ButtonDefaults.outlinedButtonColors(contentColor = activeColor),
-        border         = androidx.compose.foundation.BorderStroke(
-            1.dp, if (isActive) activeColor else activeColor.copy(alpha = 0.4f)
-        ),
-        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
-    ) {
-        icon()
-        Spacer(Modifier.width(4.dp))
-        Text(label, fontSize = 11.sp)
-    }
-}
-
-/** Blue / orange button that toggles QR calibration scanning. */
-@Composable
-private fun ScanQrButton(isScanning: Boolean, onToggle: () -> Unit) {
-    Button(
-        onClick  = onToggle,
-        modifier = Modifier.fillMaxWidth().height(48.dp),
-        shape    = RoundedCornerShape(12.dp),
-        colors   = ButtonDefaults.buttonColors(
-            containerColor = if (isScanning) Color(0xFFFF6B35) else Color(0xFF1E88E5)
-        )
-    ) {
-        Icon(
-            if (isScanning) Icons.Default.Close else Icons.Default.QrCodeScanner,
-            contentDescription = null
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(if (isScanning) "Cancel Scan" else "Scan QR (calibrate / anchor)")
-    }
-}
-
-/** Teal start / red stop button for the recording segment. */
-@Composable
-private fun RecordToggleButton(isRecording: Boolean, onToggle: () -> Unit) {
-    Button(
-        onClick  = onToggle,
-        modifier = Modifier.fillMaxWidth().height(52.dp),
-        shape    = RoundedCornerShape(12.dp),
-        colors   = ButtonDefaults.buttonColors(
-            containerColor = if (isRecording) Color.Red else Color(0xFF64FFDA)
-        )
-    ) {
-        Icon(
-            if (isRecording) Icons.Default.Stop else Icons.Default.PlayArrow,
-            contentDescription = null,
-            tint = if (isRecording) Color.White else Color.Black
-        )
-        Spacer(Modifier.width(8.dp))
-        Text(
-            if (isRecording) "Stop Segment" else "Start / Resume Recording",
-            color      = if (isRecording) Color.White else Color.Black,
-            fontWeight = FontWeight.Bold
-        )
-    }
-}
-
-/** Grey outlined button that ends the admin recording session. */
-@Composable
-private fun FinishSessionButton(onFinished: () -> Unit) {
-    OutlinedButton(
-        onClick  = onFinished,
-        modifier = Modifier.fillMaxWidth().height(48.dp),
-        shape    = RoundedCornerShape(12.dp),
-        border   = androidx.compose.foundation.BorderStroke(1.dp, Color.Gray),
-        colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color.Gray)
-    ) {
-        Icon(Icons.Default.Check, contentDescription = null)
-        Spacer(Modifier.width(8.dp))
-        Text("Finish Session")
-    }
-}
-
-// ── Cloud Anchor host button ───────────────────────────────────────────────────
-
-/**
- * Button that hosts a Cloud Anchor at the current camera position.
- * Cycles through Idle → Hosting (spinner) → Hosted (ID badge) / Failed states.
- * Hidden entirely when service-account credentials are not configured so it
- * doesn't confuse admins running in API_KEY fallback mode.
- */
-@Composable
-private fun HostCloudAnchorButton(
-    state:   HostState,
-    enabled: Boolean,
-    onClick: () -> Unit,
-) {
-    // Don't render the button at all in API_KEY fallback mode
-    // (isConfigured == false means credentials aren't set up)
-    // We still render when credentials ARE set regardless of current state
-    // so the admin can see the result of a previous host operation.
-    val (containerColor, contentColor, label, showSpinner) = when (state) {
-        is HostState.Idle    -> quadOf(Color(0xFF263238), Color(0xFF80CBC4),
-                                       "Host Cloud Anchor", false)
-        is HostState.Hosting -> quadOf(Color(0xFF263238), Color(0xFFFFCC80),
-                                       "Hosting…", true)
-        is HostState.Hosted  -> quadOf(Color(0xFF1B5E20), Color(0xFF69F0AE),
-                                       "Hosted ✓  …${state.id.takeLast(8)}", false)
-        is HostState.Failed  -> quadOf(Color(0xFF4E342E), Color(0xFFFF8A65),
-                                       "Failed: ${state.reason}", false)
-    }
-    Button(
-        onClick  = onClick,
-        enabled  = enabled || state is HostState.Hosted || state is HostState.Failed,
-        modifier = Modifier.fillMaxWidth().height(48.dp),
-        shape    = RoundedCornerShape(12.dp),
-        colors   = ButtonDefaults.buttonColors(
-            containerColor         = containerColor,
-            contentColor           = contentColor,
-            disabledContainerColor = containerColor.copy(alpha = 0.4f),
-            disabledContentColor   = contentColor.copy(alpha = 0.4f)
-        )
-    ) {
-        if (showSpinner) {
-            CircularProgressIndicator(
-                color    = contentColor,
-                modifier = Modifier.size(16.dp),
-                strokeWidth = 2.dp
-            )
-            Spacer(Modifier.width(8.dp))
-        } else {
-            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(8.dp))
-        }
-        Text(label, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
-    }
-}
-
-/** Simple tuple helper to keep the `when` expression concise. */
-private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
-private fun <A, B, C, D> quadOf(a: A, b: B, c: C, d: D) = Quad(a, b, c, d)
-private operator fun <A, B, C, D> Quad<A, B, C, D>.component1() = a
-private operator fun <A, B, C, D> Quad<A, B, C, D>.component2() = b
-private operator fun <A, B, C, D> Quad<A, B, C, D>.component3() = c
-private operator fun <A, B, C, D> Quad<A, B, C, D>.component4() = d
 
 // ── Door → QR link picker dialog ───────────────────────────────────────────────
 
@@ -485,7 +414,7 @@ internal fun DoorLinkPickerDialog(
                         modifier = Modifier.fillMaxWidth(),
                         shape    = RoundedCornerShape(8.dp),
                         colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        border   = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f))
+                        border   = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f))
                     ) {
                         Column(
                             modifier = Modifier

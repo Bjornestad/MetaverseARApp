@@ -223,10 +223,24 @@ fun ARScreen(
             // on the GL thread and must happen here before the anchor is invalidated.
             if (state == CloudAnchorState.SUCCESS) {
                 val geoPose = earth.getGeospatialPose(anchor.pose)
+                // Capture the anchor's local AR-space pose BEFORE detaching —
+                // anchor.pose is invalid after detach().  These values let
+                // onCloudAnchorResolved build a localArRef (exactly like a QR
+                // scan) so all arrows switch to the local-coordinate path:
+                // correct floor height, compass-accurate direction, no GPS drift.
+                val anchorTx = anchor.pose.tx()
+                val anchorTy = anchor.pose.ty()
+                val anchorTz = anchor.pose.tz()
+                val anchorQx = anchor.pose.qx()
+                val anchorQy = anchor.pose.qy()
+                val anchorQz = anchor.pose.qz()
+                val anchorQw = anchor.pose.qw()
                 anchor.detach()
                 scope.launch {   // → main thread
                     viewModel.onCloudAnchorResolved(
                         geoPose,
+                        anchorTx, anchorTy, anchorTz,
+                        anchorQx, anchorQy, anchorQz, anchorQw,
                         candidate.lat,
                         candidate.lon,
                         candidate.cloudAnchorHeading,
@@ -266,9 +280,12 @@ fun ARScreen(
         } else {
             if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
             NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-                // Apply headingOffset so VPS compass drift is corrected even on the
-                // earth-anchor path (the localArRef path already has this baked in).
-                val correctedBearing = pt.bearing + viewModel.headingOffset
+                // Subtract headingOffset to convert true geographic bearing → VPS-EUS bearing.
+                // VPS-EUS "north" is rotated +headingOffset clockwise from true north, so an
+                // anchor at VPS bearing B appears at true bearing B + headingOffset.  To land
+                // at true bearing pt.bearing we must place it at pt.bearing - headingOffset.
+                // (localArRef path has the correction baked in via northX/northZ — no change needed there.)
+                val correctedBearing = pt.bearing - viewModel.headingOffset
                 val q = NavGraphPathfinder.bearingToQuaternion(correctedBearing)
                 try {
                     val anchor = earth.createAnchor(
@@ -325,7 +342,10 @@ fun ARScreen(
             val earth = earthRef.value ?: return@LaunchedEffect
             if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
             NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-                val correctedBearing = pt.bearing + viewModel.headingOffset
+                // Subtract headingOffset: VPS-EUS "north" is rotated +headingOffset
+                // clockwise from true north, so we need pt.bearing - headingOffset
+                // in VPS-frame to land at the correct true geographic bearing.
+                val correctedBearing = pt.bearing - viewModel.headingOffset
                 val q = NavGraphPathfinder.bearingToQuaternion(correctedBearing)
                 try {
                     earth.createAnchor(

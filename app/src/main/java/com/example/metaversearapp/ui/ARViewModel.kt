@@ -581,8 +581,26 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
      * The offset is the difference between what VPS reports and reality,
      * exactly the same semantics as the QR-based calibration.
      */
+    /**
+     * Called when a Cloud Anchor has been successfully resolved.
+     *
+     * In addition to updating the GPS correction offsets (same as before), this now
+     * builds a [LocalArReference] from the anchor's local AR-space pose — exactly the
+     * same thing [onQrScanned] does from the camera pose at scan time.  Once localArRef
+     * is set, all arrow placement switches from GPS earth anchors to the local-coordinate
+     * path: centimetre-accurate relative positioning, correct floor height, and direction
+     * derived from the magnetometer-captured [storedHeading] rather than VPS compass.
+     *
+     * [anchorTx/Ty/Tz] and [anchorQx/Qy/Qz/Qw] are the translation and rotation of
+     * the resolved anchor's pose captured on the GL thread before anchor.detach().
+     * [refLat] / [refLon] are the ground-truth GPS coordinates stored in the NavNode.
+     * [storedHeading] is the true compass bearing recorded when the anchor was hosted
+     * (device magnetometer + accelerometer, stored in [NavNode.cloudAnchorHeading]).
+     */
     fun onCloudAnchorResolved(
         geoPose: GeospatialPose,
+        anchorTx: Float, anchorTy: Float, anchorTz: Float,
+        anchorQx: Float, anchorQy: Float, anchorQz: Float, anchorQw: Float,
         refLat: Double,
         refLon: Double,
         storedHeading: Double?,
@@ -590,17 +608,9 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     ) {
         latOffset = geoPose.latitude  - refLat
         lonOffset = geoPose.longitude - refLon
-        // The cloud anchor was hosted at the admin's camera position (≈ floor + 1.5-1.7 m).
-        // Nav nodes store corrected altitudes relative to the recording session's refAlt
-        // (which is loc.alt ≈ 0 for most QR locations), so the same altitude convention
-        // as QR calibration: altOffset = cameraAlt − refAlt = geoPose.altitude − 0.
-        // Without this, VPS earth-anchor arrows are placed at −1.7 m (underground) when
-        // the cloud anchor is the only calibration source (no QR scan in this session).
         altOffset = geoPose.altitude
 
-        // Rotation correction: geoPose.heading is what VPS reports for the anchor's
-        // forward direction; storedHeading is the true compass direction recorded when
-        // the anchor was hosted.  Their difference is the systematic VPS compass error.
+        // Heading correction (kept for the earth-anchor fallback path)
         val hdgDelta: Double? = if (storedHeading != null) {
             var raw = storedHeading - geoPose.heading
             raw = ((raw + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
@@ -608,11 +618,42 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             raw
         } else null
 
-        // Position drift magnitude for the debug overlay
+        // ── Build localArRef from the cloud anchor's AR-space pose ──────────────
+        // This mirrors onQrScanned exactly: the anchor was created at frame.camera.pose
+        // by the admin, so its orientation encodes the camera's facing direction at that
+        // moment.  Camera forward in local AR = rotate [0,0,−1] by the pose quaternion.
+        //
+        //   fwX = -2(qx·qz + qy·qw)
+        //   fwZ = -1 + 2(qx² + qy²)
+        //
+        // Once we have the forward direction we rotate it "backward" by storedHeading
+        // (the true compass bearing the admin faced) to find where north lies in local
+        // AR space.  From that point all arrows use createLocalArrowAnchor, which gives
+        // correct floor height (ref.ty − 1.7 m) and compass-accurate pointing — no GPS.
+        //
+        // Nav nodes store corrAlt = pose.altitude − altOffset_at_recording ≈ 0 for a
+        // flat corridor, so refAlt = 0.0 keeps (alt − refAlt) near zero and arrows land
+        // at floor level.  Stair altitude differences are handled by the non-zero
+        // corrAlt values recorded during the admin walk.
+        val fwX = -2f * (anchorQx * anchorQz + anchorQy * anchorQw)
+        val fwZ = -1f + 2f * (anchorQx * anchorQx + anchorQy * anchorQy)
+        val horizLen = sqrt(fwX * fwX + fwZ * fwZ)
+        val fwXn = if (horizLen > 0.01f) fwX / horizLen else 0f
+        val fwZn = if (horizLen > 0.01f) fwZ / horizLen else -1f
+        val refHeading = storedHeading ?: geoPose.heading
+        val cosH = cos(Math.toRadians(refHeading)).toFloat()
+        val sinH = sin(Math.toRadians(refHeading)).toFloat()
+        localArRef = LocalArReference(
+            tx = anchorTx, ty = anchorTy, tz = anchorTz,
+            northX = cosH * fwXn + sinH * fwZn,
+            northZ = -sinH * fwXn + cosH * fwZn,
+            refLat = refLat, refLon = refLon, refAlt = 0.0
+        )
+
+        // Debug overlay
         val dLat = (latOffset * 111_320.0)
         val dLon = (lonOffset * 111_320.0 * Math.cos(Math.toRadians(refLat)))
         val posErrM = Math.sqrt(dLat * dLat + dLon * dLon)
-
         val hdgStr = if (hdgDelta != null) "  hdg Δ%+.1f°".format(hdgDelta) else "  hdg —"
         lastCloudAnchorInfo = "⚓ …${anchorId.takeLast(8)}  pos %+.2fm%s".format(posErrM, hdgStr)
 

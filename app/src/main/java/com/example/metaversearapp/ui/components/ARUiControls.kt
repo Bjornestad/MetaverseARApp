@@ -15,7 +15,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.LinearScale
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.QrCodeScanner
@@ -36,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.ui.ARViewModel
+import com.google.ar.core.TrackingState
 import kotlin.math.*
 
 @Composable
@@ -57,7 +57,23 @@ fun ARUiOverlay(
                 .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            StatusOverlay(viewModel.statusText, viewModel.earthTrackingState)
+            // Show a waiting message until GPS/VPS has actually locked on,
+            // then fall back to the ViewModel status only while navigating.
+            val displayStatus = when {
+                viewModel.earthTrackingState != TrackingState.TRACKING ->
+                    "Connecting to GPS…"
+                viewModel.selectedDestination == null ->
+                    "Ready: select destination"
+                else ->
+                    viewModel.statusText
+            }
+            StatusOverlay(
+                status              = displayStatus,
+                trackingState       = viewModel.earthTrackingState,
+                isCloudAnchorActive = viewModel.isResolvingCloudAnchor ||
+                                      viewModel.lastCloudAnchorInfo != null,
+                cloudAnchorResolved = viewModel.lastCloudAnchorInfo != null
+            )
 
             // HUD compass — shown whenever VPS is tracking
             viewModel.geospatialPose?.let { pose ->
@@ -76,21 +92,6 @@ fun ARUiOverlay(
                     modifier            = Modifier
                         .padding(horizontal = 16.dp)
                         .fillMaxWidth()
-                )
-            }
-
-            // ── Cloud anchor status (always visible) ─────────────────────────
-            // Shows a chip whenever an anchor is being resolved or has been
-            // resolved.  Hidden in debug mode (GeospatialBottomOverlay already
-            // shows this info there), but always shown in normal use so users
-            // can see when VPS is being improved via cloud anchors.
-            if (!showDebug &&
-                (viewModel.isResolvingCloudAnchor || viewModel.lastCloudAnchorInfo != null)
-            ) {
-                Spacer(modifier = Modifier.height(2.dp))
-                CloudAnchorChip(
-                    isResolving = viewModel.isResolvingCloudAnchor,
-                    info        = viewModel.lastCloudAnchorInfo
                 )
             }
 
@@ -171,18 +172,26 @@ fun ARUiOverlay(
             }
         }
 
-        // ── BOTTOM: control bar + debug overlay ──────────────────────────────
+        // ── BOTTOM-LEFT: debug overlay stacked above minimap ────────────────
+        // Same start/width as the minimap so they form a tidy column.
+        // bottom = control-card clearance (82) + minimap height (130) + gap (4)
+        if (showDebug) {
+            GeospatialBottomOverlay(
+                viewModel = viewModel,
+                modifier  = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 216.dp)
+                    .width(130.dp)
+            )
+        }
+
+        // ── BOTTOM: control bar ───────────────────────────────────────────────
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .padding(bottom = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            // VPS debug card — only shown when debug mode is on
-            if (showDebug) {
-                GeospatialBottomOverlay(viewModel = viewModel)
-                Spacer(modifier = Modifier.height(4.dp))
-            }
 
             // ── Control bar ──────────────────────────────────────────────────
             Card(
@@ -243,21 +252,6 @@ fun ARUiOverlay(
                         )
                     }
 
-                    // Mid-corridor centroid calibration
-                    val corridorEnabled = !viewModel.isScanning && !viewModel.isCorridorCalibrating
-                    val corridorColor   = if (corridorEnabled) Color(0xFFFFCC80)
-                                         else Color(0xFFFFCC80).copy(alpha = 0.3f)
-                    OutlinedIconButton(
-                        onClick  = { viewModel.calibrateAtCorridorCentroid() },
-                        enabled  = corridorEnabled,
-                        colors   = IconButtonDefaults.outlinedIconButtonColors(
-                            contentColor         = corridorColor,
-                            disabledContentColor = corridorColor
-                        ),
-                        border = BorderStroke(1.dp, corridorColor.copy(alpha = 0.7f))
-                    ) {
-                        Icon(Icons.Default.LinearScale, contentDescription = "Calibrate at corridor midpoint")
-                    }
                 }
             }
         }
@@ -267,7 +261,7 @@ fun ARUiOverlay(
             viewModel = viewModel,
             modifier  = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = 12.dp, bottom = 82.dp)  // clears the control card
+                .padding(start = 16.dp, bottom = 82.dp)  // clears the control card
         )
 
         // ── Arrival notification ─────────────────────────────────────────────
@@ -430,7 +424,7 @@ fun MiniMap(
     viewModel  : ARViewModel,
     modifier   : Modifier = Modifier,
     sizeDp     : Dp       = 130.dp,
-    mapRadiusM : Double   = 50.0
+    mapRadiusM : Double   = 25.0
 ) {
     val pose = viewModel.geospatialPose ?: return   // hide until VPS locks
 

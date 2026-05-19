@@ -390,66 +390,98 @@ internal fun AdminRecordingScreen(
                         val corrLat = pose.latitude  - latOffset
                         val corrLon = pose.longitude - lonOffset
                         val corrAlt = pose.altitude  - altOffset
-                        // Use 3-D distance so nodes are placed evenly on staircases:
-                        // haversine-only would under-measure steep stairs (large vertical,
-                        // small horizontal) and cause nodes to bunch up at the top/bottom.
-                        val dist    = lastRecordedNode?.let {
+
+                        // Distance from the last node placed in this session.
+                        val distFromLast = lastRecordedNode?.let {
                             NavGraphPathfinder.distance3d(corrLat, corrLon, corrAlt, it.lat, it.lon, it.alt)
                         } ?: Double.MAX_VALUE
 
-                        if (dist >= MIN_NODE_DISTANCE_M) {
-                            val newNode  = NavNode(
-                                id    = UUID.randomUUID().toString(),
-                                lat   = corrLat,
-                                lon   = corrLon,
-                                alt   = corrAlt,
-                                floor = currentFloor
-                            )
-                            val prevNode     = lastRecordedNode
-                            lastRecordedNode = newNode
-                            lastCaptureTime  = now
+                        // Nearest pre-existing node (from a previous session) within
+                        // the no-duplicate radius.  Altitude guard prevents matching
+                        // vertically stacked corridors on different floors.
+                        val nearExisting = preloadedNodes.firstOrNull { existing ->
+                            existing.id != lastRecordedNode?.id &&
+                            kotlin.math.abs(existing.alt - corrAlt) <= 3.0 &&
+                            NavGraphPathfinder.haversine(
+                                corrLat, corrLon, existing.lat, existing.lon
+                            ) < MIN_NODE_DISTANCE_M
+                        }
 
-                            scope.launch {
-                                db.navDao().insertNode(newNode)
-                                sessionNodes++
+                        if (distFromLast >= MIN_NODE_DISTANCE_M) {
+                            if (nearExisting != null) {
+                                // ── Merge: already covered by a previous session ─────
+                                // Don't create a duplicate node.  Adopt the existing
+                                // node as the current chain anchor so that when the
+                                // path later enters new territory the new node will
+                                // bridge back to the existing graph correctly.
+                                val prevNode = lastRecordedNode
+                                lastRecordedNode = nearExisting
+                                lastCaptureTime  = now
                                 if (prevNode != null) {
-                                    db.navDao().insertEdge(
-                                        NavEdge(
-                                            fromId = prevNode.id,
-                                            toId   = newNode.id,
-                                            weight = NavGraphPathfinder.distance3d(
-                                                prevNode.lat, prevNode.lon, prevNode.alt,
-                                                newNode.lat,  newNode.lon,  newNode.alt
+                                    scope.launch {
+                                        val d = NavGraphPathfinder.distance3d(
+                                            prevNode.lat, prevNode.lon, prevNode.alt,
+                                            nearExisting.lat, nearExisting.lon, nearExisting.alt
+                                        )
+                                        db.navDao().insertEdge(NavEdge(prevNode.id, nearExisting.id, d))
+                                        db.navDao().insertEdge(NavEdge(nearExisting.id, prevNode.id, d))
+                                        sessionEdges += 2
+                                        statusMsg = "Following existing path…"
+                                    }
+                                }
+                            } else {
+                                // ── New node: this position has no existing coverage ──
+                                val newNode  = NavNode(
+                                    id    = UUID.randomUUID().toString(),
+                                    lat   = corrLat,
+                                    lon   = corrLon,
+                                    alt   = corrAlt,
+                                    floor = currentFloor
+                                )
+                                val prevNode     = lastRecordedNode
+                                lastRecordedNode = newNode
+                                lastCaptureTime  = now
+
+                                scope.launch {
+                                    db.navDao().insertNode(newNode)
+                                    sessionNodes++
+                                    if (prevNode != null) {
+                                        db.navDao().insertEdge(
+                                            NavEdge(
+                                                fromId = prevNode.id,
+                                                toId   = newNode.id,
+                                                weight = NavGraphPathfinder.distance3d(
+                                                    prevNode.lat, prevNode.lon, prevNode.alt,
+                                                    newNode.lat,  newNode.lon,  newNode.alt
+                                                )
                                             )
                                         )
-                                    )
-                                    sessionEdges++
-                                }
-                                // Auto-bridge to nearby pre-recorded segments.
-                                // No bridgedNodeIds guard — Room's composite PK
-                                // deduplicates edges silently on REPLACE, so every
-                                // nearby node gets a connection attempt each capture.
-                                // Altitude guard prevents spurious cross-floor bridges
-                                // between vertically stacked corridors.
-                                val bridges = preloadedNodes.filter { existing ->
-                                    existing.id != newNode.id &&
-                                    existing.id != prevNode?.id &&
-                                    kotlin.math.abs(existing.alt - newNode.alt) <= 3.0 &&
-                                    NavGraphPathfinder.haversine(
-                                        newNode.lat, newNode.lon, existing.lat, existing.lon
-                                    ) <= SEGMENT_SNAP_RADIUS_M
-                                }
-                                for (nearby in bridges) {
-                                    val d = NavGraphPathfinder.distance3d(
-                                        newNode.lat, newNode.lon, newNode.alt,
-                                        nearby.lat,  nearby.lon,  nearby.alt
-                                    )
-                                    db.navDao().insertEdge(NavEdge(newNode.id, nearby.id, d))
-                                    db.navDao().insertEdge(NavEdge(nearby.id, newNode.id, d))
-                                    sessionEdges += 2
-                                }
-                                if (bridges.isNotEmpty()) {
-                                    statusMsg = "Auto-bridged to ${bridges.size} nearby segment(s)"
+                                        sessionEdges++
+                                    }
+                                    // Auto-bridge to nearby pre-recorded segments within
+                                    // SEGMENT_SNAP_RADIUS_M (wider than MIN_NODE_DISTANCE_M
+                                    // so junctions get connected even if not perfectly
+                                    // aligned).  Altitude guard prevents cross-floor bridges.
+                                    val bridges = preloadedNodes.filter { existing ->
+                                        existing.id != newNode.id &&
+                                        existing.id != prevNode?.id &&
+                                        kotlin.math.abs(existing.alt - newNode.alt) <= 3.0 &&
+                                        NavGraphPathfinder.haversine(
+                                            newNode.lat, newNode.lon, existing.lat, existing.lon
+                                        ) <= SEGMENT_SNAP_RADIUS_M
+                                    }
+                                    for (nearby in bridges) {
+                                        val d = NavGraphPathfinder.distance3d(
+                                            newNode.lat, newNode.lon, newNode.alt,
+                                            nearby.lat,  nearby.lon,  nearby.alt
+                                        )
+                                        db.navDao().insertEdge(NavEdge(newNode.id, nearby.id, d))
+                                        db.navDao().insertEdge(NavEdge(nearby.id, newNode.id, d))
+                                        sessionEdges += 2
+                                    }
+                                    if (bridges.isNotEmpty()) {
+                                        statusMsg = "Auto-bridged to ${bridges.size} nearby segment(s)"
+                                    }
                                 }
                             }
                         }

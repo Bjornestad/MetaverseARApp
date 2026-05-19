@@ -72,7 +72,12 @@ fun CloudAnchorChip(
 }
 
 @Composable
-fun StatusOverlay(status: String, trackingState: TrackingState = TrackingState.STOPPED) {
+fun StatusOverlay(
+    status               : String,
+    trackingState        : TrackingState = TrackingState.STOPPED,
+    isCloudAnchorActive  : Boolean       = false,
+    cloudAnchorResolved  : Boolean       = false
+) {
     val (vpsIcon, vpsColor) = when (trackingState) {
         TrackingState.TRACKING -> Icons.Default.GpsFixed    to Color(0xFF64FFDA)
         TrackingState.PAUSED   -> Icons.Default.GpsNotFixed to Color(0xFFFFCC80)
@@ -84,24 +89,62 @@ fun StatusOverlay(status: String, trackingState: TrackingState = TrackingState.S
             .fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = OverlayBackground)
     ) {
-        Row(
-            modifier          = Modifier
-                .padding(horizontal = 14.dp, vertical = 10.dp)
-                .fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                status,
-                modifier = Modifier.weight(1f),
-                style    = MaterialTheme.typography.bodySmall,
-                color    = Color.White.copy(alpha = 0.9f)
-            )
-            Icon(
-                imageVector        = vpsIcon,
-                contentDescription = "VPS status",
-                tint               = vpsColor,
-                modifier           = Modifier.size(16.dp)
-            )
+        Column {
+            Row(
+                modifier          = Modifier
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+                    .fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    status,
+                    modifier = Modifier.weight(1f),
+                    style    = MaterialTheme.typography.bodySmall,
+                    color    = Color.White.copy(alpha = 0.9f)
+                )
+                Icon(
+                    imageVector        = vpsIcon,
+                    contentDescription = "VPS status",
+                    tint               = vpsColor,
+                    modifier           = Modifier.size(16.dp)
+                )
+            }
+
+            // ── Cloud anchor indicator ─────────────────────────────────────────
+            // Shown inside the card whenever an anchor is being resolved or has
+            // been resolved, so the user knows the system is using high-accuracy
+            // anchor tracking rather than GPS alone.
+            if (isCloudAnchorActive) {
+                HorizontalDivider(
+                    modifier  = Modifier.padding(horizontal = 14.dp),
+                    thickness = 1.dp,
+                    color     = Color.White.copy(alpha = 0.08f)
+                )
+                Row(
+                    modifier             = Modifier
+                        .padding(horizontal = 14.dp, vertical = 6.dp)
+                        .fillMaxWidth(),
+                    verticalAlignment    = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val anchorColor = if (cloudAnchorResolved) Color(0xFFFFD700)
+                                      else Color(0xFFFFCC80)
+                    Text("⚓", fontSize = 11.sp, color = anchorColor)
+                    Text(
+                        text     = if (cloudAnchorResolved) "Anchor tracking active"
+                                   else "Locating anchor…",
+                        style    = MaterialTheme.typography.labelSmall,
+                        color    = anchorColor,
+                        modifier = Modifier.weight(1f)
+                    )
+                    // Filled dot: gold when resolved, hollow-ish amber when still resolving
+                    Surface(
+                        shape    = CircleShape,
+                        color    = anchorColor,
+                        modifier = Modifier.size(6.dp)
+                    ) {}
+                }
+            }
         }
     }
 }
@@ -150,36 +193,37 @@ fun NavigationArrow(currentPose: GeospatialPose, destination: QrLocation, latOff
 }
 
 @Composable
-fun GeospatialBottomOverlay(viewModel: ARViewModel) {
+fun GeospatialBottomOverlay(viewModel: ARViewModel, modifier: Modifier = Modifier) {
     val pose = viewModel.geospatialPose
     val trackingState = viewModel.earthTrackingState
     val isCalibrated = viewModel.isCalibrated
 
     Card(
-        modifier = Modifier.padding(16.dp).fillMaxWidth(),
+        modifier = modifier,
         colors = CardDefaults.cardColors(containerColor = OverlayBackground)
     ) {
         Column(modifier = Modifier.padding(12.dp)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(
-                    "VPS Status:",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = Color.White.copy(alpha = 0.7f)
-                )
-                val statusColor = if (isCalibrated) Color(0xFF4CAF50) else Color(0xFFFFCC80)
-                Text(
-                    if (isCalibrated) "CALIBRATED" else "UNCALIBRATED",
-                    color = statusColor,
-                    style = MaterialTheme.typography.labelLarge
-                )
+            // VPS status as a single coloured dot:
+            //   green  = tracking + calibrated
+            //   amber  = tracking, not yet calibrated
+            //   red    = not tracking
+            val vpsColor = when {
+                trackingState == TrackingState.TRACKING && isCalibrated -> Color(0xFF4CAF50)
+                trackingState == TrackingState.TRACKING                  -> Color(0xFFFFCC80)
+                else                                                     -> Color(0xFFFF5252)
             }
-
-            Text(
-                "Tracking: ${trackingState.name}",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (trackingState == TrackingState.TRACKING) Color(0xFF4CAF50)
-                        else Color(0xFFFF5252)
-            )
+            Row(
+                modifier             = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment    = Alignment.CenterVertically
+            ) {
+                Text(
+                    "VPS",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White.copy(alpha = 0.6f)
+                )
+                Surface(shape = CircleShape, color = vpsColor, modifier = Modifier.size(8.dp)) {}
+            }
 
             if (pose != null && trackingState == TrackingState.TRACKING) {
                 HorizontalDivider(
@@ -228,10 +272,15 @@ fun GeospatialBottomOverlay(viewModel: ARViewModel) {
                     )
                 }
                 Text(
-                    String.format(Locale.US, "Lat: %.6f  Lon: %.6f", pose.latitude, pose.longitude),
+                    String.format(Locale.US, "Lat: %.6f", pose.latitude),
                     style = MaterialTheme.typography.labelSmall,
                     color = Color(0xFF64FFDA).copy(alpha = 0.8f),
                     modifier = Modifier.padding(top = 4.dp)
+                )
+                Text(
+                    String.format(Locale.US, "Lon: %.6f", pose.longitude),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFF64FFDA).copy(alpha = 0.8f)
                 )
             }
 
