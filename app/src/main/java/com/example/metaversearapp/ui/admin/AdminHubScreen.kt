@@ -59,6 +59,8 @@ internal fun AdminHubScreen(
                     // locally recorded nodes (not yet in Gist) are untouched.
                     export.nodes.forEach { db.navDao().insertNode(it) }
                     export.edges.forEach { db.navDao().insertEdge(it) }
+                    export.wifiFingerprints.forEach { db.wifiDao().insertFingerprint(it) }
+                    export.roomAps.forEach { db.wifiDao().insertOrUpdateRoomAp(it) }
                 }
             }
             adminGistSyncDone = true
@@ -156,12 +158,14 @@ internal fun AdminHubScreen(
                     scope.launch {
                         isUploading  = true
                         uploadStatus = "Uploading…"
-                        val nodes  = db.navDao().getAllNodes()
-                        val edges  = db.navDao().getAllEdges()
-                        val result = NavGistSync.upload(nodes, edges)
+                        val nodes        = db.navDao().getAllNodes()
+                        val edges        = db.navDao().getAllEdges()
+                        val fingerprints = db.wifiDao().getAllFingerprints()
+                        val roomAps      = db.wifiDao().getAllRoomAps()
+                        val result       = NavGistSync.upload(nodes, edges, fingerprints, roomAps)
                         isUploading  = false
                         uploadStatus = result.fold(
-                            onSuccess = { "✓ Uploaded ${nodes.size} nodes, ${edges.size} edges to Gist" },
+                            onSuccess = { "✓ Uploaded ${nodes.size} nodes, ${edges.size} edges, ${fingerprints.size} WiFi fingerprints" },
                             onFailure = { "✗ Upload failed: ${it.message}" }
                         )
                     }

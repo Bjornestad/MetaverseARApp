@@ -1,5 +1,7 @@
 package com.example.metaversearapp.ui.admin
 
+import android.content.Context
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.view.Surface
 import android.view.WindowManager
@@ -21,6 +23,9 @@ import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
+import com.example.metaversearapp.data.BssidObservation
+import com.example.metaversearapp.data.RoomAp
+import com.example.metaversearapp.data.WifiFingerprint
 import com.google.ar.core.Config
 import com.google.ar.core.GeospatialPose
 import com.google.ar.core.TrackingState
@@ -135,6 +140,67 @@ internal fun AdminRecordingScreen(
             lastNodeType     = type
             statusMsg = "Marked as ${type.name.replace('_', ' ').lowercase()
                 .replaceFirstChar { it.uppercase() }}"
+
+            // ── WiFi capture at semantic waypoints ───────────────────────────────────
+            // Record a fingerprint and dominant AP whenever the admin marks a
+            // node as DOOR, STAIR_TOP, STAIR_MIDDLE, or STAIR_BOTTOM.
+            // These are high-value locations for positioning: stair landings have
+            // very distinctive WiFi signatures (floor transitions create sharp RSSI
+            // gradients), and doors always have the room's own AP nearby.
+            val wm          = context.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            val scanResults = wm?.scanResults.orEmpty()
+            if (scanResults.isNotEmpty()) {
+                // Always add a fingerprint at semantic nodes for richer grid coverage
+                val obs = scanResults
+                    .sortedByDescending { it.level }
+                    .take(20)
+                    .mapIndexed { rank, r ->
+                        BssidObservation(
+                            bssid = r.BSSID,
+                            rssi  = r.level,
+                            rank  = rank + 1,
+                            freq  = r.frequency
+                        )
+                    }
+                db.wifiDao().insertFingerprint(
+                    WifiFingerprint(
+                        id           = UUID.randomUUID().toString(),
+                        nodeId       = updated.id,
+                        observations = obs
+                    )
+                )
+                // For DOOR nodes: also record the dominant AP so the room can be
+                // detected passively if the node already has an anchorQrId.
+                // For stair nodes: record dominant AP keyed by the node's own ID
+                // so the matching engine can detect stair proximity from WiFi.
+                val dominant = scanResults.maxByOrNull { it.level }
+                if (dominant != null) {
+                    when (type) {
+                        NodeType.DOOR -> {
+                            val qrId = updated.anchorQrId
+                            if (qrId != null) {
+                                db.wifiDao().insertOrUpdateRoomAp(
+                                    RoomAp(qrId = qrId, bssid = dominant.BSSID, rssi = dominant.level)
+                                )
+                            }
+                        }
+                        NodeType.STAIR_TOP,
+                        NodeType.STAIR_MIDDLE,
+                        NodeType.STAIR_BOTTOM -> {
+                            // Keyed by node ID (prefixed) so stair APs don’t collide
+                            // with room APs in the same table.
+                            db.wifiDao().insertOrUpdateRoomAp(
+                                RoomAp(
+                                    qrId  = "stair:${updated.id}",
+                                    bssid = dominant.BSSID,
+                                    rssi  = dominant.level
+                                )
+                            )
+                        }
+                        else -> Unit
+                    }
+                }
+            }
 
             // Auto-connect stair nodes:
             //  - STAIR_TOP / STAIR_BOTTOM link to each other across floors (existing behaviour)
@@ -302,6 +368,35 @@ internal fun AdminRecordingScreen(
                             scope.launch {
                                 db.navDao().insertNode(newNode)
                                 sessionNodes++
+
+                                // ── WiFi grid capture ──────────────────────────────
+                                // Record a fingerprint at every grid cell (nav node).
+                                // Uses OS-cached scanResults — no startScan() call
+                                // needed; enterprise networks refresh every few seconds.
+                                val wm = context.getSystemService(Context.WIFI_SERVICE)
+                                    as? WifiManager
+                                val scanResults = wm?.scanResults.orEmpty()
+                                if (scanResults.isNotEmpty()) {
+                                    val obs = scanResults
+                                        .sortedByDescending { it.level }
+                                        .take(20)
+                                        .mapIndexed { rank, r ->
+                                            BssidObservation(
+                                                bssid = r.BSSID,
+                                                rssi  = r.level,
+                                                rank  = rank + 1,
+                                                freq  = r.frequency
+                                            )
+                                        }
+                                    db.wifiDao().insertFingerprint(
+                                        WifiFingerprint(
+                                            id           = UUID.randomUUID().toString(),
+                                            nodeId       = newNode.id,
+                                            observations = obs
+                                        )
+                                    )
+                                }
+
                                 if (prevNode != null) {
                                     db.navDao().insertEdge(
                                         NavEdge(
@@ -375,27 +470,58 @@ internal fun AdminRecordingScreen(
                                             scope.launch {
                                                 val loc = db.qrDao().getById(qrId)
                                                 if (loc != null) {
-                                                    latOffset    = pose.latitude  - loc.lat
-                                                    lonOffset    = pose.longitude - loc.lon
+                                                    // ── Calibration fix ─────────────────────────
+                                                    // Use the last recorded node's position
+                                                    // (recorded at the door) as the reference,
+                                                    // NOT loc.lat/lon (room centre from Gist).
+                                                    // Falls back to room centre only if no node
+                                                    // has been recorded yet this session.
+                                                    val refNode = lastRecordedNode
+                                                    if (refNode != null) {
+                                                        latOffset = pose.latitude  - refNode.lat
+                                                        lonOffset = pose.longitude - refNode.lon
+                                                    } else {
+                                                        latOffset = pose.latitude  - loc.lat
+                                                        lonOffset = pose.longitude - loc.lon
+                                                    }
                                                     if (loc.alt != 0.0) altOffset = pose.altitude - loc.alt
                                                     isCalibrated = true
                                                     isScanning   = false
-                                                    lastRecordedNode?.let { node ->
+
+                                                    // ── Room AP association ───────────────────────
+                                                    // The strongest AP at a door is almost always
+                                                    // that room's dedicated AP. Store it so users
+                                                    // can be detected near this room passively.
+                                                    val wm = context.getSystemService(Context.WIFI_SERVICE)
+                                                        as? WifiManager
+                                                    val strongest = wm?.scanResults?.maxByOrNull { it.level }
+                                                    if (strongest != null) {
+                                                        db.wifiDao().insertOrUpdateRoomAp(
+                                                            RoomAp(
+                                                                qrId  = qrId,
+                                                                bssid = strongest.BSSID,
+                                                                rssi  = strongest.level
+                                                            )
+                                                        )
+                                                    }
+
+                                                    // ── Anchor node ──────────────────────────────
+                                                    // Keep recorded lat/lon (door position).
+                                                    // Do NOT overwrite with loc.lat/lon (room centre).
+                                                    refNode?.let { node ->
                                                         val anchored = node.copy(
                                                             anchorQrId = qrId,
                                                             label      = loc.name,
-                                                            lat        = loc.lat,
-                                                            lon        = loc.lon,
-                                                            alt        = if (loc.alt != 0.0) loc.alt else node.alt
+                                                            type       = NodeType.DOOR
                                                         )
                                                         db.navDao().updateNode(anchored)
                                                         reweightEdgesForNode(anchored)
                                                         lastRecordedNode = anchored
                                                     }
                                                     statusMsg = if (isRecording)
-                                                        "Recalibrated at ${loc.name} — keep walking"
+                                                        "Recalibrated at door of ${loc.name} — keep walking"
                                                     else
-                                                        "Calibrated at ${loc.name} — ready to record"
+                                                        "Calibrated at door of ${loc.name} — ready to record"
                                                 } else {
                                                     statusMsg = "QR not in database: $qrId"
                                                 }

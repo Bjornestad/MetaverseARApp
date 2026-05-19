@@ -83,7 +83,12 @@ object NavGistSync {
      *
      * @return [Result.success] on HTTP 2xx, [Result.failure] otherwise.
      */
-    suspend fun upload(nodes: List<NavNode>, edges: List<NavEdge>): Result<Unit> {
+    suspend fun upload(
+        nodes:        List<NavNode>,
+        edges:        List<NavEdge>,
+        fingerprints: List<WifiFingerprint> = emptyList(),
+        roomAps:      List<RoomAp>          = emptyList()
+    ): Result<Unit> {
         val gistId = resolveGistId(BuildConfig.NAV_GRAPH_GIST_ID)
         val token  = BuildConfig.GITHUB_TOKEN
         if (gistId.isBlank() || token.isBlank()) {
@@ -94,7 +99,7 @@ object NavGistSync {
             )
         }
 
-        val payload = prettyJson.encodeToString(NavGraphExport(nodes, edges))
+        val payload = prettyJson.encodeToString(NavGraphExport(nodes, edges, fingerprints, roomAps))
         val body    = GistPatchRequest(
             files = mapOf(NAVGRAPH_FILENAME to GistFileContent(content = payload))
         )
