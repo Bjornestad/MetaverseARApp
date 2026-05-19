@@ -18,3 +18,11 @@ internal const val QR_LINK_RADIUS_M       = 12.0     // max metres to auto-link 
 internal const val SEGMENT_SNAP_RADIUS_M  = 5.0      // max metres to auto-bridge a new node to an existing one during recording
 
 internal val FLOOR_OPTIONS = listOf("-2", "-1", "0", "1", "2", "3", "4", "5")
+
+/** Represents the lifecycle of a Cloud Anchor host operation. */
+internal sealed class HostState {
+    object Idle                           : HostState()
+    object Hosting                        : HostState()
+    data class Hosted(val id: String)     : HostState()
+    data class Failed(val reason: String) : HostState()
+}

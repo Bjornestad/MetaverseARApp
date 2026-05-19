@@ -24,12 +24,25 @@ android {
         versionCode = 1
         versionName = "1.0"
         
-        // Use the key from local.properties, or empty string if not found
         manifestPlaceholders["arcoreApiKey"] = localProperties.getProperty("ARCORE_API_KEY") ?: ""
 
         // GitHub Gist secrets — defined in local.properties, never committed to VCS
         buildConfigField("String", "GITHUB_TOKEN",       "\"${localProperties.getProperty("GITHUB_TOKEN")       ?: ""}\"")
         buildConfigField("String", "NAV_GRAPH_GIST_ID",  "\"${localProperties.getProperty("NAV_GRAPH_GIST_ID")  ?: ""}\"")
+
+        // ARCore Cloud Anchor keyless auth — service account credentials.
+        // Properties.load() turns \n sequences into real newlines; re-escape them
+        // so the generated BuildConfig.java contains a valid single-line string literal.
+        fun escapeForJavaString(s: String) = s
+            .replace("\\", "\\\\")   // backslash must come first
+            .replace("\"", "\\\"")   // embedded quotes
+            .replace("\n", "\\n")    // real newlines → \n escape
+            .replace("\r", "\\r")    // carriage returns
+
+        buildConfigField("String", "ARCORE_CLIENT_EMAIL",
+            "\"${escapeForJavaString(localProperties.getProperty("ARCORE_CLIENT_EMAIL") ?: "")}\"")
+        buildConfigField("String", "ARCORE_PRIVATE_KEY",
+            "\"${escapeForJavaString(localProperties.getProperty("ARCORE_PRIVATE_KEY")  ?: "")}\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

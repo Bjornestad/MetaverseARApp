@@ -58,6 +58,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.AdminPanelSettings
 import androidx.compose.material.icons.filled.LocationOff
+import com.google.ar.core.Anchor.CloudAnchorState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -149,6 +150,7 @@ fun ARScreen(
     var lastPathDropTime   by remember { mutableLongStateOf(0L) }
     val earthRef   = remember { mutableStateOf<Earth?>(null) }
     val sessionRef = remember { mutableStateOf<Session?>(null) }
+    val resolvedAnchorIds = remember { mutableSetOf<String>() }
 
     // --- DESTINATION PATH (room selector → A* arrows) ---
     // destPathProgress is a local copy of the ViewModel path that shrinks as
@@ -173,6 +175,51 @@ fun ARScreen(
             viewModel.destinationPathNodes.isEmpty()
         ) {
             viewModel.computeDestinationPath()
+        }
+    }
+
+    // --- CLOUD ANCHOR RESOLUTION ---
+    // When VPS is tracking, find the nearest unresolved cloud-anchor node within 15 m
+    // and resolve it. A successful resolve calibrates the lat/lon offsets via the
+    // geospatial pose of the resolved anchor (cm-accurate, unlike GPS).
+    LaunchedEffect(
+        viewModel.earthTrackingState,
+        viewModel.navNodes,
+        viewModel.isResolvingCloudAnchor,
+        earthRef.value,
+        sessionRef.value
+    ) {
+        if (viewModel.earthTrackingState != TrackingState.TRACKING) return@LaunchedEffect
+        if (viewModel.isResolvingCloudAnchor) return@LaunchedEffect
+        val earth   = earthRef.value ?: return@LaunchedEffect
+        val session = sessionRef.value ?: return@LaunchedEffect
+
+        val userPose = earth.cameraGeospatialPose
+        val candidate = viewModel.navNodes
+            .filter { it.cloudAnchorId != null && it.cloudAnchorId !in resolvedAnchorIds }
+            .minByOrNull {
+                NavGraphPathfinder.haversine(userPose.latitude, userPose.longitude, it.lat, it.lon)
+            } ?: return@LaunchedEffect
+
+        val dist = NavGraphPathfinder.haversine(
+            userPose.latitude, userPose.longitude, candidate.lat, candidate.lon
+        )
+        if (dist > 15.0) return@LaunchedEffect
+
+        // Mark as in-flight immediately to prevent duplicate resolves
+        viewModel.isResolvingCloudAnchor = true
+        resolvedAnchorIds.add(candidate.cloudAnchorId!!)
+
+        session.resolveCloudAnchorAsync(candidate.cloudAnchorId) { anchor, state ->
+            if (state == CloudAnchorState.SUCCESS) {
+                val geoPose = earth.getGeospatialPose(anchor.pose)
+                viewModel.onCloudAnchorResolved(geoPose, candidate.lat, candidate.lon)
+                anchor.detach()
+            } else {
+                // Allow retry on failure
+                resolvedAnchorIds.remove(candidate.cloudAnchorId)
+                viewModel.isResolvingCloudAnchor = false
+            }
         }
     }
 
@@ -324,8 +371,9 @@ fun ARScreen(
                     modelLoader = modelLoader,
                     materialLoader = materialLoader,
                     sessionConfiguration = { session, config ->
-                        config.geospatialMode = Config.GeospatialMode.ENABLED
-                        config.focusMode = Config.FocusMode.AUTO
+                        config.geospatialMode  = Config.GeospatialMode.ENABLED
+                        config.cloudAnchorMode = Config.CloudAnchorMode.ENABLED
+                        config.focusMode       = Config.FocusMode.AUTO
                         config.planeFindingMode = if (showDebug)
                             Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                         else
@@ -336,6 +384,7 @@ fun ARScreen(
                         val earth = session.earth
                         earthRef.value = earth
                         sessionRef.value = session
+
                         viewModel.updateGeospatialState(earth)
 
                         if (earth != null && earth.trackingState == TrackingState.TRACKING) {

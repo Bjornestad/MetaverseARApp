@@ -41,5 +41,10 @@ data class NavNode(
     val floor: String = "1",
     val anchorQrId: String? = null,
     val label: String = "",
-    val type: NodeType = NodeType.WAYPOINT
+    val type: NodeType = NodeType.WAYPOINT,
+    /** ARCore Cloud Anchor ID hosted at this node's physical position.
+     *  Non-null only for nodes that an admin has explicitly hosted.
+     *  Used by the user-side to resolve the anchor and get a precise
+     *  calibration offset, bypassing GPS inaccuracy. */
+    val cloudAnchorId: String? = null
 )

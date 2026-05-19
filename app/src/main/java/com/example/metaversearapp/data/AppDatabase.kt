@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [QrLocation::class, NavNode::class, NavEdge::class],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 @TypeConverters(NodeTypeConverter::class)
@@ -25,6 +25,18 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL(
             "ALTER TABLE nav_nodes ADD COLUMN type TEXT NOT NULL DEFAULT 'WAYPOINT'"
+        )
+    }
+}
+
+/**
+ * Adds the [cloudAnchorId] column to nav_nodes.
+ * Nullable — existing nodes have no cloud anchor until an admin explicitly hosts one.
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            "ALTER TABLE nav_nodes ADD COLUMN cloudAnchorId TEXT"
         )
     }
 }

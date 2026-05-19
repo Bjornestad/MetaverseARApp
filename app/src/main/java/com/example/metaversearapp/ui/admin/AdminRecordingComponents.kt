@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -153,20 +154,23 @@ private fun VpsReadoutCard(
 
 /**
  * Scrollable bottom panel: floor selector, mark-waypoint card, scan QR,
- * start/stop recording, and finish session.
+ * start/stop recording, host cloud anchor, and finish session.
  */
 @Composable
 internal fun RecordingControlsPanel(
-    currentFloor:     String,
-    onFloorChange:    (String) -> Unit,
-    lastRecordedNode: NavNode?,
-    lastNodeType:     NodeType,
-    onMarkAs:         (NodeType) -> Unit,
-    isScanning:       Boolean,
-    onScanToggle:     () -> Unit,
-    isRecording:      Boolean,
-    onRecordToggle:   () -> Unit,
-    onFinished:       () -> Unit,
+    currentFloor:      String,
+    onFloorChange:     (String) -> Unit,
+    lastRecordedNode:  NavNode?,
+    lastNodeType:      NodeType,
+    onMarkAs:          (NodeType) -> Unit,
+    isScanning:        Boolean,
+    onScanToggle:      () -> Unit,
+    isRecording:       Boolean,
+    onRecordToggle:    () -> Unit,
+    onFinished:        () -> Unit,
+    cloudHostState:    HostState  = HostState.Idle,
+    onHostCloudAnchor: () -> Unit = {},
+    canHostAnchor:     Boolean    = false,
 ) {
     Column(
         modifier            = Modifier.verticalScroll(rememberScrollState()),
@@ -176,6 +180,7 @@ internal fun RecordingControlsPanel(
         MarkWaypointCard(lastRecordedNode, lastNodeType, onMarkAs)
         ScanQrButton(isScanning, onScanToggle)
         RecordToggleButton(isRecording, onRecordToggle)
+        HostCloudAnchorButton(cloudHostState, canHostAnchor, onHostCloudAnchor)
         FinishSessionButton(onFinished)
     }
 }
@@ -380,6 +385,69 @@ private fun FinishSessionButton(onFinished: () -> Unit) {
         Text("Finish Session")
     }
 }
+
+// ── Cloud Anchor host button ───────────────────────────────────────────────────
+
+/**
+ * Button that hosts a Cloud Anchor at the current camera position.
+ * Cycles through Idle → Hosting (spinner) → Hosted (ID badge) / Failed states.
+ * Hidden entirely when service-account credentials are not configured so it
+ * doesn't confuse admins running in API_KEY fallback mode.
+ */
+@Composable
+private fun HostCloudAnchorButton(
+    state:   HostState,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    // Don't render the button at all in API_KEY fallback mode
+    // (isConfigured == false means credentials aren't set up)
+    // We still render when credentials ARE set regardless of current state
+    // so the admin can see the result of a previous host operation.
+    val (containerColor, contentColor, label, showSpinner) = when (state) {
+        is HostState.Idle    -> quadOf(Color(0xFF263238), Color(0xFF80CBC4),
+                                       "Host Cloud Anchor", false)
+        is HostState.Hosting -> quadOf(Color(0xFF263238), Color(0xFFFFCC80),
+                                       "Hosting…", true)
+        is HostState.Hosted  -> quadOf(Color(0xFF1B5E20), Color(0xFF69F0AE),
+                                       "Hosted ✓  …${state.id.takeLast(8)}", false)
+        is HostState.Failed  -> quadOf(Color(0xFF4E342E), Color(0xFFFF8A65),
+                                       "Failed: ${state.reason}", false)
+    }
+    Button(
+        onClick  = onClick,
+        enabled  = enabled || state is HostState.Hosted || state is HostState.Failed,
+        modifier = Modifier.fillMaxWidth().height(48.dp),
+        shape    = RoundedCornerShape(12.dp),
+        colors   = ButtonDefaults.buttonColors(
+            containerColor         = containerColor,
+            contentColor           = contentColor,
+            disabledContainerColor = containerColor.copy(alpha = 0.4f),
+            disabledContentColor   = contentColor.copy(alpha = 0.4f)
+        )
+    ) {
+        if (showSpinner) {
+            CircularProgressIndicator(
+                color    = contentColor,
+                modifier = Modifier.size(16.dp),
+                strokeWidth = 2.dp
+            )
+            Spacer(Modifier.width(8.dp))
+        } else {
+            Icon(Icons.Default.CloudUpload, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(label, fontSize = 12.sp, fontFamily = FontFamily.Monospace)
+    }
+}
+
+/** Simple tuple helper to keep the `when` expression concise. */
+private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
+private fun <A, B, C, D> quadOf(a: A, b: B, c: C, d: D) = Quad(a, b, c, d)
+private operator fun <A, B, C, D> Quad<A, B, C, D>.component1() = a
+private operator fun <A, B, C, D> Quad<A, B, C, D>.component2() = b
+private operator fun <A, B, C, D> Quad<A, B, C, D>.component3() = c
+private operator fun <A, B, C, D> Quad<A, B, C, D>.component4() = d
 
 // ── Door → QR link picker dialog ───────────────────────────────────────────────
 

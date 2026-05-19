@@ -21,8 +21,11 @@ import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
+import com.google.ar.core.Anchor.CloudAnchorState
 import com.google.ar.core.Config
 import com.google.ar.core.GeospatialPose
+import com.google.ar.core.Pose
+import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -99,6 +102,11 @@ internal fun AdminRecordingScreen(
     // so we don't need a separate bridgedNodeIds set — every nearby node gets a bridge
     // attempt on every new node, and the DB deduplicates silently.
     var preloadedNodes by remember { mutableStateOf<List<NavNode>>(emptyList()) }
+
+    // ── Cloud Anchor state ─────────────────────────────────────────────────────
+    var arSession        by remember { mutableStateOf<Session?>(null) }
+    var lastCameraPose   by remember { mutableStateOf<Pose?>(null) }
+    var cloudHostState   by remember { mutableStateOf<HostState>(HostState.Idle) }
 
     // ── Door → QR link picker state ────────────────────────────────────────────
     var showDoorLinkDialog by remember { mutableStateOf(false) }
@@ -211,6 +219,24 @@ internal fun AdminRecordingScreen(
         }
     }
 
+    /**
+     * Recomputes the weight of every edge that touches [node], using the node's
+     * current (possibly just-snapped) coordinates and the neighbour's stored coords.
+     * Must be called after any operation that moves a node's lat/lon/alt in the DB.
+     */
+    suspend fun reweightEdgesForNode(node: NavNode) {
+        val edges = db.navDao().getEdgesForNode(node.id)
+        for (edge in edges) {
+            val neighbourId = if (edge.fromId == node.id) edge.toId else edge.fromId
+            val neighbour   = db.navDao().getNodeById(neighbourId) ?: continue
+            val newWeight   = NavGraphPathfinder.distance3d(
+                node.lat, node.lon, node.alt,
+                neighbour.lat, neighbour.lon, neighbour.alt
+            )
+            db.navDao().insertEdge(edge.copy(weight = newWeight))
+        }
+    }
+
     /** Snaps [pendingDoorNode] to [qr]'s ground-truth coords and persists the link. */
     fun linkDoorToQr(qr: QrLocation) {
         val node = pendingDoorNode ?: return
@@ -233,20 +259,45 @@ internal fun AdminRecordingScreen(
     }
 
     /**
-     * Recomputes the weight of every edge that touches [node], using the node's
-     * current (possibly just-snapped) coordinates and the neighbour's stored coords.
-     * Must be called after any operation that moves a node's lat/lon/alt in the DB.
+     * Creates a local ARCore anchor at the current camera position and hosts it
+     * as a Cloud Anchor with a 365-day TTL.  On success the ID is stored in the
+     * last recorded node so it syncs to the Gist and is available for user-side
+     * resolution.  Requires [CloudAnchorAuth.isConfigured] and an active session.
      */
-    suspend fun reweightEdgesForNode(node: NavNode) {
-        val edges = db.navDao().getEdgesForNode(node.id)
-        for (edge in edges) {
-            val neighbourId = if (edge.fromId == node.id) edge.toId else edge.fromId
-            val neighbour   = db.navDao().getNodeById(neighbourId) ?: continue
-            val newWeight   = NavGraphPathfinder.distance3d(
-                node.lat, node.lon, node.alt,
-                neighbour.lat, neighbour.lon, neighbour.alt
-            )
-            db.navDao().insertEdge(edge.copy(weight = newWeight))
+    fun hostCloudAnchor() {
+        val session = arSession ?: run {
+            statusMsg = "AR session not ready — wait for tracking"
+            return
+        }
+        val pose = lastCameraPose ?: run {
+            statusMsg = "No camera pose yet — wait for VPS lock"
+            return
+        }
+        if (cloudHostState == HostState.Hosting) return
+
+        cloudHostState = HostState.Hosting
+        statusMsg      = "Hosting cloud anchor…"
+
+        val anchor = session.createAnchor(pose)
+        session.hostCloudAnchorAsync(anchor, 1) { cloudId, state ->
+            anchor.detach()
+            when (state) {
+                CloudAnchorState.SUCCESS -> {
+                    cloudHostState = HostState.Hosted(cloudId)
+                    statusMsg      = "Hosted ✓  …${cloudId.takeLast(8)}"
+                    lastRecordedNode?.let { node ->
+                        scope.launch {
+                            val updated = node.copy(cloudAnchorId = cloudId)
+                            db.navDao().updateNode(updated)
+                            lastRecordedNode = updated
+                        }
+                    }
+                }
+                else -> {
+                    cloudHostState = HostState.Failed(state.name)
+                    statusMsg      = "Hosting failed: ${state.name}"
+                }
+            }
         }
     }
 
@@ -262,10 +313,15 @@ internal fun AdminRecordingScreen(
                 modelLoader    = modelLoader,
                 materialLoader = materialLoader,
                 sessionConfiguration = { _, config ->
-                    config.geospatialMode = Config.GeospatialMode.ENABLED
-                    config.focusMode      = Config.FocusMode.AUTO
+                    config.geospatialMode  = Config.GeospatialMode.ENABLED
+                    config.cloudAnchorMode = Config.CloudAnchorMode.ENABLED
+                    config.focusMode       = Config.FocusMode.AUTO
                 },
                 onSessionUpdated = { session, frame ->
+                    // Capture session + camera pose for cloud anchor hosting
+                    arSession      = session
+                    lastCameraPose = frame.camera.pose
+
                     val earth = session.earth
 
                     if (earth != null) {
@@ -435,18 +491,18 @@ internal fun AdminRecordingScreen(
                 altOffset          = altOffset,
             )
             RecordingControlsPanel(
-                currentFloor     = currentFloor,
-                onFloorChange    = onFloorChange,
-                lastRecordedNode = lastRecordedNode,
-                lastNodeType     = lastNodeType,
-                onMarkAs         = ::markLastNodeAs,
-                isScanning       = isScanning,
-                onScanToggle     = {
+                currentFloor       = currentFloor,
+                onFloorChange      = onFloorChange,
+                lastRecordedNode   = lastRecordedNode,
+                lastNodeType       = lastNodeType,
+                onMarkAs           = ::markLastNodeAs,
+                isScanning         = isScanning,
+                onScanToggle       = {
                     isScanning = !isScanning
                     if (isScanning) statusMsg = "Point camera at a QR code..."
                 },
-                isRecording      = isRecording,
-                onRecordToggle   = {
+                isRecording        = isRecording,
+                onRecordToggle     = {
                     isRecording = !isRecording
                     if (isRecording) {
                         lastRecordedNode = null
@@ -459,10 +515,14 @@ internal fun AdminRecordingScreen(
                         statusMsg = "Paused — mark waypoint type or start new segment"
                     }
                 },
-                onFinished = {
+                onFinished         = {
                     isRecording = false
                     onFinished()
                 },
+                cloudHostState     = cloudHostState,
+                onHostCloudAnchor  = ::hostCloudAnchor,
+                canHostAnchor      = lastRecordedNode != null &&
+                                     earthTrackingState == TrackingState.TRACKING,
             )
         }
     }

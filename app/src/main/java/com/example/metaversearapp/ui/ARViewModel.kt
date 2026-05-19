@@ -95,6 +95,9 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var isCalibrated by mutableStateOf(false)
         private set
 
+    /** True while a Cloud Anchor resolve operation is in flight. */
+    var isResolvingCloudAnchor by mutableStateOf(false)
+
     // Accuracy Metrics
     var horizontalAccuracy by mutableDoubleStateOf(0.0)
         private set
@@ -544,6 +547,28 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             earthTrackingState = TrackingState.STOPPED
             geospatialPose = null
         }
+    }
+
+    /**
+     * Called when a Cloud Anchor has been successfully resolved.
+     *
+     * [geoPose] is the geospatial pose of the resolved anchor obtained via
+     * `Earth.getGeospatialPose(anchor.pose)` — this gives the VPS coordinate
+     * that corresponds to the anchor's known physical position.
+     * [refLat] / [refLon] are the ground-truth coordinates stored in the
+     * NavNode when the anchor was hosted.
+     *
+     * The offset is the difference between what VPS reports and reality,
+     * exactly the same semantics as the QR-based calibration.
+     */
+    fun onCloudAnchorResolved(geoPose: GeospatialPose, refLat: Double, refLon: Double) {
+        latOffset    = geoPose.latitude  - refLat
+        lonOffset    = geoPose.longitude - refLon
+        isCalibrated = true
+        isResolvingCloudAnchor = false
+        val accuracyM = geoPose.horizontalAccuracy.toInt()
+        statusText = "Calibrated via cloud anchor (±${accuracyM}m VPS)"
+        computeDestinationPath()
     }
 
     /**

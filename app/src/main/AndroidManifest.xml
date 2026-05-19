@@ -23,12 +23,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.MetaverseARapp">
 
-        <!-- ARCore API Key authentication configuration -->
+        <!-- ARCore authentication: API_KEY mode.
+             Switch to KEYLESS (remove API_KEY entry, set AUTH_MODE=KEYLESS) once the app
+             is registered in Play Console — KEYLESS requires Play integrity attestation. -->
         <meta-data
             android:name="com.google.android.ar.AUTH_MODE"
             android:value="API_KEY" />
-
-        <!-- This value is injected from local.properties via build.gradle.kts -->
         <meta-data
             android:name="com.google.android.ar.API_KEY"
             android:value="${arcoreApiKey}" />
