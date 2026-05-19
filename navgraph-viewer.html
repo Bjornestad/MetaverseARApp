@@ -134,6 +134,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
 #map.mode-box    { cursor: crosshair; }
 #map.mode-zone   { cursor: crosshair; }
 #map.mode-fill   { cursor: crosshair; }
+#map.mode-facing { cursor: crosshair; }
 
 /* ── Drop overlay ── */
 #drop-overlay {
@@ -312,6 +313,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
     <div class="leg-row"><div class="leg-dot" style="background:#fbbf24;border:2px solid #fbbf24"></div> Selected</div>
     <div class="leg-row"><div class="leg-dot" style="background:#f87171;border:2px dashed #f87171"></div> Disconnected</div>
     <div class="leg-row"><div class="leg-dot" style="background:transparent;border:2px dashed #fde047"></div> Cloud anchor</div>
+    <div class="leg-row"><div class="leg-line" style="background:#2dd4bf"></div> QR facing dir.</div>
     <strong style="margin-top:6px">Edges</strong>
     <div class="leg-row"><div class="leg-line" style="background:#38bdf8"></div> Normal</div>
     <div class="leg-line" style="background:transparent"></div>
@@ -351,6 +353,7 @@ const PALETTE = {
     edgeCross:   '#f87171',
     edgeStair:   '#c084fc',
     anchorRing:  '#fde047',
+    facingArrow: '#2dd4bf',
   },
   light: {
     floor:       ['#0369a1','#be185d','#15803d','#b45309','#6d28d9','#c2410c','#a21caf'],
@@ -362,6 +365,7 @@ const PALETTE = {
     edgeCross:   '#dc2626',
     edgeStair:   '#7c3aed',
     anchorRing:  '#ca8a04',
+    facingArrow: '#0d9488',
   },
 };
 
@@ -402,13 +406,18 @@ let isDrawing    = false;
 let drawStart    = null;
 let drawRect     = null; // L.Rectangle preview
 
+// Facing-edit state
+let facingEditNodeId = null; // node ID whose facingDeg is being edited
+let facingPreviewGroup = null; // L.LayerGroup for the live arrow preview
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAP SETUP
 // ═══════════════════════════════════════════════════════════════════════════
 const map = L.map('map', { preferCanvas: true, zoomSnap: 0.5 }).setView([0,0], 2);
 
-layerGroup     = L.layerGroup().addTo(map);
-zoneLayerGroup = L.layerGroup().addTo(map);
+layerGroup          = L.layerGroup().addTo(map);
+zoneLayerGroup      = L.layerGroup().addTo(map);
+facingPreviewGroup  = L.layerGroup().addTo(map);
 applyTheme(); // sets tileLayer and initial colours
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -433,6 +442,48 @@ function buildComponents(nodes, edges) {
   nodes.forEach(n => { const c=find(n.id); size[c]=(size[c]||0)+1; });
   const main = Object.entries(size).sort((a,b)=>b[1]-a[1])[0]?.[0];
   return { find, size, main };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ARROW HELPERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Returns two Leaflet polylines forming a compass arrow originating from node n.
+ * @param {object} n       – node with .lat / .lon
+ * @param {number} hdg     – compass bearing in degrees (0=N, 90=E…)
+ * @param {string} color   – CSS colour
+ * @param {number} shaftM  – shaft length in metres
+ * @param {number} armM    – arrowhead arm length in metres
+ * @param {number} weight  – line weight
+ * @returns {L.Polyline[]} – [shaft, arrowhead]
+ */
+function drawArrow(n, hdg, color, shaftM, armM, weight) {
+  const hdgRad = hdg * Math.PI / 180;
+  const cosLat = Math.cos(n.lat * Math.PI / 180);
+  const tipLat = n.lat + shaftM * Math.cos(hdgRad) / 111111;
+  const tipLon = n.lon + shaftM * Math.sin(hdgRad) / (111111 * cosLat);
+  const arm = off => {
+    const a = (hdg + off) * Math.PI / 180;
+    return [tipLat + armM * Math.cos(a) / 111111,
+            tipLon + armM * Math.sin(a) / (111111 * cosLat)];
+  };
+  return [
+    L.polyline([[n.lat, n.lon], [tipLat, tipLon]], { color, weight, opacity: .95 }),
+    L.polyline([arm(145), [tipLat, tipLon], arm(-145)], { color, weight, opacity: .95 }),
+  ];
+}
+
+/**
+ * Compass bearing (0–360°) from point 1 to point 2.
+ */
+function bearingBetween(lat1, lon1, lat2, lon2) {
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const φ1   = lat1 * Math.PI / 180;
+  const φ2   = lat2 * Math.PI / 180;
+  const y = Math.sin(dLon) * Math.cos(φ2);
+  const x = Math.cos(φ1) * Math.sin(φ2) - Math.sin(φ1) * Math.cos(φ2) * Math.cos(dLon);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -511,32 +562,15 @@ function render() {
 
       // Bearing arrow — shown when heading was recorded
       if (n.cloudAnchorHeading != null) {
-        const hdg    = n.cloudAnchorHeading;
-        const hdgRad = hdg * Math.PI / 180;
-        const cosLat = Math.cos(n.lat * Math.PI / 180);
-
-        // Shaft: node centre → tip (4 m ahead)
-        const shaftM = 4.0;
-        const tipLat = n.lat + shaftM * Math.cos(hdgRad) / 111111;
-        const tipLon = n.lon + shaftM * Math.sin(hdgRad) / (111111 * cosLat);
-
-        // Arrowhead: two arms 1.5 m long at ±145° from heading
-        const armM = 1.5;
-        const arm = (off) => {
-          const a = (hdg + off) * Math.PI / 180;
-          return [tipLat + armM * Math.cos(a) / 111111,
-                  tipLon + armM * Math.sin(a) / (111111 * cosLat)];
-        };
-
-        layerGroup.addLayer(L.polyline(
-          [[n.lat, n.lon], [tipLat, tipLon]],
-          { color: p.anchorRing, weight: 2, opacity: .9 }
-        ));
-        layerGroup.addLayer(L.polyline(
-          [arm(145), [tipLat, tipLon], arm(-145)],
-          { color: p.anchorRing, weight: 2, opacity: .9 }
-        ));
+        drawArrow(n, n.cloudAnchorHeading, p.anchorRing, 4.0, 1.5, 2).forEach(l => layerGroup.addLayer(l));
       }
+    }
+
+    // ── QR facing arrow (facingDeg) ──────────────────────────────────
+    if (n.facingDeg != null) {
+      const isEditing = n.id === facingEditNodeId;
+      const col = isEditing ? '#f97316' : p.facingArrow; // orange tint while editing
+      drawArrow(n, n.facingDeg, col, 5.0, 1.8, 2.5).forEach(l => layerGroup.addLayer(l));
     }
   });
 }
@@ -724,6 +758,7 @@ function setMode(m) {
   } else {
     map.doubleClickZoom.enable();
   }
+  if (facingEditNodeId) cancelFacingEdit();
   if (m !== 'select') { selected.clear(); updateSelUI(); render(); }
   if (m !== 'fill') { hideFillPanel(); clearFillPoly(); }
 }
@@ -1147,7 +1182,25 @@ function showNodeInfo(n, comp, sz, isMain) {
   const headingVal = n.cloudAnchorHeading != null
     ? `${n.cloudAnchorHeading.toFixed(1)}° (${bearingLabel(n.cloudAnchorHeading)})`
     : '—';
-  showPanel('Node', [
+
+  // facingDeg row — always shown for QR-linked nodes; includes edit controls
+  let facingVal = '—';
+  if (n.anchorQrId) {
+    const degStr = n.facingDeg != null
+      ? `${n.facingDeg.toFixed(1)}° (${bearingLabel(n.facingDeg)})`
+      : 'not set';
+    const btnStyle = 'margin-left:6px;padding:1px 7px;border-radius:4px;font-size:11px;cursor:pointer;'
+      + 'border:1px solid #2dd4bf;color:#2dd4bf;background:transparent;';
+    const clrStyle = n.facingDeg != null
+      ? 'margin-left:4px;padding:1px 7px;border-radius:4px;font-size:11px;cursor:pointer;'
+        + 'border:1px solid #f87171;color:#f87171;background:transparent;'
+      : 'display:none';
+    facingVal = `${degStr}`
+      + `<button style="${btnStyle}" onclick="startFacingEdit('${n.id}')">✏ Aim</button>`
+      + `<button style="${clrStyle}" onclick="clearFacingDeg('${n.id}')">✕</button>`;
+  }
+
+  const rows = [
     ['Type',           n.type || 'WAYPOINT'],
     ['Floor',          n.floor ?? '—'],
     ['Lat',            n.lat.toFixed(8)],
@@ -1158,7 +1211,9 @@ function showNodeInfo(n, comp, sz, isMain) {
     ['Anchor heading', headingVal],
     ['Component',      isMain ? `Main (${sz})` : `⚠ Isolated (${sz})`],
     ['ID',             `<span style="font-size:10px;color:#555">${n.id}</span>`],
-  ]);
+  ];
+  if (n.anchorQrId) rows.splice(6, 0, ['QR facing', facingVal]);
+  showPanel('Node', rows);
 }
 function showEdgeInfo(e, a, b) {
   showPanel('Edge', [
@@ -1175,6 +1230,72 @@ function showPanel(title, rows) {
     rows.map(([k,v])=>`<tr><td>${k}</td><td>${v}</td></tr>`).join('');
   document.getElementById('info-panel').style.display = 'block';
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FACING-EDIT MODE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Enter facing-edit mode for the given node. */
+function startFacingEdit(nodeId) {
+  facingEditNodeId = nodeId;
+  document.getElementById('map').classList.add('mode-facing');
+  document.getElementById('info-panel').style.display = 'none';
+  render(); // highlight node with orange arrow if it already has a value
+  setStatus('🧭 Click anywhere on the map to set which direction the QR faces — Esc to cancel');
+}
+
+/** Cancel facing-edit without saving. */
+function cancelFacingEdit() {
+  if (!facingEditNodeId) return;
+  facingEditNodeId = null;
+  facingPreviewGroup.clearLayers();
+  document.getElementById('map').classList.remove('mode-facing');
+  render();
+  setStatus('Facing edit cancelled');
+}
+
+/** Remove a previously stored facingDeg from a node. */
+function clearFacingDeg(nodeId) {
+  const n = graphData?.nodes.find(x => x.id === nodeId);
+  if (!n) return;
+  pushUndo();
+  delete n.facingDeg;
+  render();
+  // Refresh info panel
+  const { find, size, main } = buildComponents(graphData.nodes, graphData.edges);
+  showNodeInfo(n, find(n.id), size[find(n.id)], find(n.id) === main);
+  setStatus('QR facing direction cleared');
+}
+
+// Live preview arrow while moving the mouse in facing-edit mode
+map.on('mousemove', e => {
+  if (!facingEditNodeId) return;
+  const n = graphData?.nodes.find(x => x.id === facingEditNodeId);
+  if (!n) return;
+  facingPreviewGroup.clearLayers();
+  const hdg = bearingBetween(n.lat, n.lon, e.latlng.lat, e.latlng.lng);
+  drawArrow(n, hdg, '#f97316', 5.0, 1.8, 2.5).forEach(l => facingPreviewGroup.addLayer(l));
+  setStatus(`🧭 Facing: ${hdg.toFixed(1)}° (${bearingLabel(hdg)}) — click to confirm · Esc to cancel`);
+});
+
+// Confirm on click
+map.on('click', e => {
+  if (mode === 'fill') return; // fill click handler runs first via its own listener
+  if (!facingEditNodeId) return;
+  const n = graphData?.nodes.find(x => x.id === facingEditNodeId);
+  if (!n) return;
+  const hdg = bearingBetween(n.lat, n.lon, e.latlng.lat, e.latlng.lng);
+  pushUndo();
+  n.facingDeg = parseFloat(hdg.toFixed(2));
+  facingEditNodeId = null;
+  facingPreviewGroup.clearLayers();
+  document.getElementById('map').classList.remove('mode-facing');
+  render();
+  // Re-open info panel with updated values
+  const { find, size, main } = buildComponents(graphData.nodes, graphData.edges);
+  showNodeInfo(n, find(n.id), size[find(n.id)], find(n.id) === main);
+  setStatus(`✅ QR facing set to ${hdg.toFixed(1)}° (${bearingLabel(hdg)}) — export to save`);
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STATS & STATUS
@@ -1218,7 +1339,7 @@ document.addEventListener('drop', e => {
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size) deleteSelected();
-  if (e.key === 'Escape') { deselect(); setMode('view'); }
+  if (e.key === 'Escape') { cancelFacingEdit(); deselect(); setMode('view'); }
   if (e.key === 'z' && (e.ctrlKey||e.metaKey)) undo();
   if (e.key === '1') setMode('view');
   if (e.key === '2') setMode('select');

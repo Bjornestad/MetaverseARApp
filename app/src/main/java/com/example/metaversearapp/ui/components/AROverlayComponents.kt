@@ -195,6 +195,30 @@ fun GeospatialBottomOverlay(viewModel: ARViewModel) {
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
+
+            // Cloud anchor resolution info — shown once an anchor has been resolved
+            val anchorInfo = viewModel.lastCloudAnchorInfo
+            if (anchorInfo != null) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    color    = Color.White.copy(alpha = 0.1f)
+                )
+                Text(
+                    anchorInfo,
+                    style    = MaterialTheme.typography.labelSmall,
+                    color    = Color(0xFFFFD700).copy(alpha = 0.9f)
+                )
+            } else if (viewModel.isResolvingCloudAnchor) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    color    = Color.White.copy(alpha = 0.1f)
+                )
+                Text(
+                    "⚓ Resolving cloud anchor…",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color(0xFFFFCC80).copy(alpha = 0.9f)
+                )
+            }
         }
     }
 }

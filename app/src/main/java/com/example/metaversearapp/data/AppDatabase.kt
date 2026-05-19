@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [QrLocation::class, NavNode::class, NavEdge::class],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 @TypeConverters(NodeTypeConverter::class)
@@ -50,6 +50,19 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL(
             "ALTER TABLE nav_nodes ADD COLUMN cloudAnchorHeading REAL"
+        )
+    }
+}
+
+/**
+ * Adds [QrLocation.facingDeg] — the sensor-captured compass bearing an admin
+ * faces when looking at this QR code.  Used to replace GPS-based bearing
+ * calculation in [ARViewModel.onQrScanned], avoiding 180° heading flips.
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            "ALTER TABLE qr_locations ADD COLUMN facingDeg REAL"
         )
     }
 }

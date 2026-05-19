@@ -17,7 +17,19 @@ data class QrLocation(
     val lat: Double,
     val lon: Double,
     val alt: Double = 0.0,
-    val direction: String = "Unknown"
+    val direction: String = "Unknown",
+    /**
+     * True compass bearing (degrees, 0 = north, clockwise) that a user faces
+     * when they are looking at this QR code.  Captured from the Android
+     * rotation-vector sensor (accelerometer + magnetometer, GPS-independent)
+     * at the moment an admin links a door node to this QR in the recording
+     * screen.  Null until that link step has been performed.
+     *
+     * Used in [ARViewModel.onQrScanned] as the ground-truth heading so that
+     * the VPS compass error can be corrected without relying on GPS positions
+     * (which are too inaccurate at 1–3 m distances to give a reliable bearing).
+     */
+    val facingDeg: Double? = null
 )
 
 /**

@@ -27,7 +27,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -97,6 +96,14 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
 
     /** True while a Cloud Anchor resolve operation is in flight. */
     var isResolvingCloudAnchor by mutableStateOf(false)
+
+    /**
+     * Human-readable summary of the last cloud anchor resolution, shown in the
+     * debug overlay.  Null until the first anchor is resolved this session.
+     * Format: "⚓ …<shortId>  pos ±Xm  hdg Δ±Y°"
+     */
+    var lastCloudAnchorInfo by mutableStateOf<String?>(null)
+        private set
 
     // Accuracy Metrics
     var horizontalAccuracy by mutableDoubleStateOf(0.0)
@@ -309,21 +316,25 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 altOffset = scanPose.altitude - refAlt
 
                 // ── Heading calibration ──────────────────────────────────────
-                // The user was facing the QR code when they scanned it, so the
-                // bearing from the scan position toward the door node is a good
-                // estimate of the true compass direction they were looking.
-                // headingOffset corrects the systematic VPS compass error for
-                // this session: correctedHeading = vps.heading + headingOffset
-                val dLon  = Math.toRadians(refLon - scanPose.longitude)
-                val lat1  = Math.toRadians(scanPose.latitude)
-                val lat2  = Math.toRadians(refLat)
-                val y     = sin(dLon) * cos(lat2)
-                val x     = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
-                val trueHeading = (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
-                // Normalise offset to (−180, 180] so we never apply a huge wrap-around
-                var rawOffset = trueHeading - scanPose.heading
-                rawOffset = ((rawOffset + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
-                headingOffset = rawOffset
+                // Use the sensor-captured facing direction stored at QR link time
+                // (hardware magnetometer + accelerometer, no GPS, no VPS) as the
+                // ground truth heading.  This avoids the 180° flip that occurs
+                // when GPS-based bearing is used: GPS error is 5–15 m indoors but
+                // the user-to-QR distance is only 1–3 m, making GPS bearing
+                // unreliable and sometimes exactly backwards.
+                //
+                // If facingDeg was not captured yet (older QR links), skip heading
+                // correction entirely — a missing correction is safer than a wrong
+                // one.  The arrows will be slightly off from VPS compass error, but
+                // will never flip 180°.
+                val trueHeading = loc.facingDeg
+                if (trueHeading != null) {
+                    var rawOffset = trueHeading - scanPose.heading
+                    rawOffset = ((rawOffset + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+                    headingOffset = rawOffset
+                }
+                // else: leave headingOffset at its current value (0 on a fresh session,
+                // or whatever a previous cloud-anchor calibration set it to)
 
                 // Establish local AR reference for QR-relative anchor placement.
                 // Camera forward in local AR = rotate [0,0,-1] by camera quaternion.
@@ -332,8 +343,12 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 val horizLen = sqrt(fwX * fwX + fwZ * fwZ)
                 val fwXn = if (horizLen > 0.01f) fwX / horizLen else 0f
                 val fwZn = if (horizLen > 0.01f) fwZ / horizLen else -1f
-                val cosH = cos(Math.toRadians(trueHeading)).toFloat()
-                val sinH = sin(Math.toRadians(trueHeading)).toFloat()
+                // Use facingDeg (sensor-captured true north) when available.
+                // Fall back to VPS heading when it hasn't been captured yet —
+                // the localArRef will be slightly wrong but at least never flipped.
+                val refHeading = trueHeading ?: scanPose.heading
+                val cosH = cos(Math.toRadians(refHeading)).toFloat()
+                val sinH = sin(Math.toRadians(refHeading)).toFloat()
                 localArRef = LocalArReference(
                     tx = camTx, ty = camTy, tz = camTz,
                     northX = cosH * fwXn + sinH * fwZn,
@@ -350,6 +365,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 } else {
                     "Calibrated at $sourceName"
                 }
+
+                // Recompute the path now that offsets are correct — the previous path
+                // was found using raw (uncorrected) GPS, so the start node was likely
+                // wrong and may have returned empty or a badly-routed result.
+                computeDestinationPath()
             } else {
                 statusText = "Unknown QR Code: $qrId"
             }
@@ -561,9 +581,34 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
      * The offset is the difference between what VPS reports and reality,
      * exactly the same semantics as the QR-based calibration.
      */
-    fun onCloudAnchorResolved(geoPose: GeospatialPose, refLat: Double, refLon: Double) {
-        latOffset    = geoPose.latitude  - refLat
-        lonOffset    = geoPose.longitude - refLon
+    fun onCloudAnchorResolved(
+        geoPose: GeospatialPose,
+        refLat: Double,
+        refLon: Double,
+        storedHeading: Double?,
+        anchorId: String
+    ) {
+        latOffset = geoPose.latitude  - refLat
+        lonOffset = geoPose.longitude - refLon
+
+        // Rotation correction: geoPose.heading is what VPS reports for the anchor's
+        // forward direction; storedHeading is the true compass direction recorded when
+        // the anchor was hosted.  Their difference is the systematic VPS compass error.
+        val hdgDelta: Double? = if (storedHeading != null) {
+            var raw = storedHeading - geoPose.heading
+            raw = ((raw + 180.0) % 360.0 + 360.0) % 360.0 - 180.0
+            headingOffset = raw
+            raw
+        } else null
+
+        // Position drift magnitude for the debug overlay
+        val dLat = (latOffset * 111_320.0)
+        val dLon = (lonOffset * 111_320.0 * Math.cos(Math.toRadians(refLat)))
+        val posErrM = Math.sqrt(dLat * dLat + dLon * dLon)
+
+        val hdgStr = if (hdgDelta != null) "  hdg Δ%+.1f°".format(hdgDelta) else "  hdg —"
+        lastCloudAnchorInfo = "⚓ …${anchorId.takeLast(8)}  pos %+.2fm%s".format(posErrM, hdgStr)
+
         isCalibrated = true
         isResolvingCloudAnchor = false
         val accuracyM = geoPose.horizontalAccuracy.toInt()

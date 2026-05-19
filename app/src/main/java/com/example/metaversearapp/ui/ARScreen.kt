@@ -213,7 +213,13 @@ fun ARScreen(
         session.resolveCloudAnchorAsync(candidate.cloudAnchorId) { anchor, state ->
             if (state == CloudAnchorState.SUCCESS) {
                 val geoPose = earth.getGeospatialPose(anchor.pose)
-                viewModel.onCloudAnchorResolved(geoPose, candidate.lat, candidate.lon)
+                viewModel.onCloudAnchorResolved(
+                    geoPose,
+                    candidate.lat,
+                    candidate.lon,
+                    candidate.cloudAnchorHeading,
+                    candidate.cloudAnchorId!!
+                )
                 anchor.detach()
             } else {
                 // Allow retry on failure
@@ -243,7 +249,10 @@ fun ARScreen(
         } else {
             if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
             NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-                val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
+                // Apply headingOffset so VPS compass drift is corrected even on the
+                // earth-anchor path (the localArRef path already has this baked in).
+                val correctedBearing = pt.bearing + viewModel.headingOffset
+                val q = NavGraphPathfinder.bearingToQuaternion(correctedBearing)
                 try {
                     val anchor = earth.createAnchor(
                         pt.lat + viewModel.latOffset,
@@ -299,7 +308,8 @@ fun ARScreen(
             val earth = earthRef.value ?: return@LaunchedEffect
             if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
             NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-                val q = NavGraphPathfinder.bearingToQuaternion(pt.bearing)
+                val correctedBearing = pt.bearing + viewModel.headingOffset
+                val q = NavGraphPathfinder.bearingToQuaternion(correctedBearing)
                 try {
                     earth.createAnchor(
                         pt.lat + viewModel.latOffset,

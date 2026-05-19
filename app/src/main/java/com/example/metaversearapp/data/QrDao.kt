@@ -14,4 +14,8 @@ interface QrDao {
 
     @Upsert
     suspend fun insertAll(locations: List<QrLocation>): List<Long>
+
+    /** Persists the sensor-captured facing direction for a single QR location. */
+    @Query("UPDATE qr_locations SET facingDeg = :deg WHERE qrID = :id")
+    suspend fun updateFacingDeg(id: String, deg: Double)
 }

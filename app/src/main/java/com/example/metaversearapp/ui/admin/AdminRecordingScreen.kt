@@ -1,5 +1,10 @@
 package com.example.metaversearapp.ui.admin
 
+import android.content.Context
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Build
 import android.view.Surface
 import android.view.WindowManager
@@ -115,6 +120,29 @@ internal fun AdminRecordingScreen(
     var cloudHostState   by remember { mutableStateOf<HostState>(HostState.Idle) }
     // Hosted cloud anchor visuals — kept alive (not detached) so they render in the scene
     var cloudAnchorVisuals by remember { mutableStateOf<List<Anchor>>(emptyList()) }
+
+    // ── Hardware compass heading (rotation-vector sensor, GPS-independent) ────────
+    // Continuously updated so linkDoorToQr() can snapshot the current facing
+    // direction without any GPS involvement.  This avoids the 180° flip that
+    // occurs when GPS positions are used to derive a bearing at short distances.
+    var sensorHeading by remember { mutableStateOf<Double?>(null) }
+    DisposableEffect(Unit) {
+        val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val sensor = sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
+        val rotMatrix = FloatArray(9)
+        val orientation = FloatArray(3)
+        val listener = object : SensorEventListener {
+            override fun onSensorChanged(event: SensorEvent) {
+                SensorManager.getRotationMatrixFromVector(rotMatrix, event.values)
+                SensorManager.getOrientation(rotMatrix, orientation)
+                // orientation[0] = azimuth in radians (-π … π), 0 = north
+                sensorHeading = (Math.toDegrees(orientation[0].toDouble()) + 360.0) % 360.0
+            }
+            override fun onAccuracyChanged(sensor: Sensor, accuracy: Int) {}
+        }
+        sensor?.let { sm.registerListener(listener, it, SensorManager.SENSOR_DELAY_UI) }
+        onDispose { sm.unregisterListener(listener) }
+    }
 
     // ── Door → QR link picker state ────────────────────────────────────────────
     var showDoorLinkDialog by remember { mutableStateOf(false) }
@@ -248,6 +276,10 @@ internal fun AdminRecordingScreen(
     /** Snaps [pendingDoorNode] to [qr]'s ground-truth coords and persists the link. */
     fun linkDoorToQr(qr: QrLocation) {
         val node = pendingDoorNode ?: return
+        // Snapshot the hardware compass heading now — admin is standing in front
+        // of the QR code so this IS the direction users will face when scanning.
+        // Stored so onQrScanned() can use it as ground truth instead of GPS bearing.
+        val capturedFacingDeg = sensorHeading
         scope.launch {
             val linked = node.copy(
                 anchorQrId = qr.qrID,
@@ -259,7 +291,12 @@ internal fun AdminRecordingScreen(
             db.navDao().updateNode(linked)
             reweightEdgesForNode(linked)
             lastRecordedNode = linked
-            statusMsg = "Door linked to '${qr.name}'"
+            if (capturedFacingDeg != null) {
+                db.qrDao().updateFacingDeg(qr.qrID, capturedFacingDeg)
+                statusMsg = "Door linked to '${qr.name}'  ·  facing %.1f°".format(capturedFacingDeg)
+            } else {
+                statusMsg = "Door linked to '${qr.name}'"
+            }
         }
         showDoorLinkDialog = false
         pendingDoorNode    = null
