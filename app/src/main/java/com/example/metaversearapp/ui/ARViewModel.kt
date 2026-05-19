@@ -590,6 +590,13 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     ) {
         latOffset = geoPose.latitude  - refLat
         lonOffset = geoPose.longitude - refLon
+        // The cloud anchor was hosted at the admin's camera position (≈ floor + 1.5-1.7 m).
+        // Nav nodes store corrected altitudes relative to the recording session's refAlt
+        // (which is loc.alt ≈ 0 for most QR locations), so the same altitude convention
+        // as QR calibration: altOffset = cameraAlt − refAlt = geoPose.altitude − 0.
+        // Without this, VPS earth-anchor arrows are placed at −1.7 m (underground) when
+        // the cloud anchor is the only calibration source (no QR scan in this session).
+        altOffset = geoPose.altitude
 
         // Rotation correction: geoPose.heading is what VPS reports for the anchor's
         // forward direction; storedHeading is the true compass direction recorded when

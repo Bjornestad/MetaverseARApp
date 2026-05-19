@@ -32,6 +32,45 @@ import kotlin.math.*
 /** Shared dark-translucent surface colour used across all AR overlay cards. */
 val OverlayBackground = Color(0xFF0F1923).copy(alpha = 0.88f)
 
+/**
+ * A small persistent chip that surfaces cloud-anchor activity outside debug mode.
+ *
+ * Shows:
+ *  • amber pulse text while a resolve is in flight ([isResolving] == true)
+ *  • gold anchor-info string once resolved ([info] != null)
+ *  • nothing when neither condition is met (returns early)
+ *
+ * The chip sits in the top status column so users always know whether the system
+ * has calibrated via cloud anchors — previously this was buried in the debug overlay.
+ */
+@Composable
+fun CloudAnchorChip(
+    isResolving : Boolean,
+    info        : String?,
+    modifier    : Modifier = Modifier
+) {
+    val (text, color) = when {
+        isResolving  -> "⚓  Locating via cloud anchor…" to Color(0xFFFFCC80)
+        info != null -> info                              to Color(0xFFFFD700)
+        else         -> return
+    }
+    Card(
+        modifier = modifier
+            .padding(horizontal = 16.dp)
+            .fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = OverlayBackground.copy(alpha = 0.75f)
+        )
+    ) {
+        Text(
+            text     = text,
+            style    = MaterialTheme.typography.labelSmall,
+            color    = color,
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+        )
+    }
+}
+
 @Composable
 fun StatusOverlay(status: String, trackingState: TrackingState = TrackingState.STOPPED) {
     val (vpsIcon, vpsColor) = when (trackingState) {

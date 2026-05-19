@@ -79,6 +79,21 @@ fun ARUiOverlay(
                 )
             }
 
+            // ── Cloud anchor status (always visible) ─────────────────────────
+            // Shows a chip whenever an anchor is being resolved or has been
+            // resolved.  Hidden in debug mode (GeospatialBottomOverlay already
+            // shows this info there), but always shown in normal use so users
+            // can see when VPS is being improved via cloud anchors.
+            if (!showDebug &&
+                (viewModel.isResolvingCloudAnchor || viewModel.lastCloudAnchorInfo != null)
+            ) {
+                Spacer(modifier = Modifier.height(2.dp))
+                CloudAnchorChip(
+                    isResolving = viewModel.isResolvingCloudAnchor,
+                    info        = viewModel.lastCloudAnchorInfo
+                )
+            }
+
             // ── Debug-only controls ──────────────────────────────────────────
             if (showDebug) {
                 // Combined route card: arrow overview + waypoints remaining

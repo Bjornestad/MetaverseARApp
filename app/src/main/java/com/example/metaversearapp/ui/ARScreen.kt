@@ -211,20 +211,29 @@ fun ARScreen(
         resolvedAnchorIds.add(candidate.cloudAnchorId!!)
 
         session.resolveCloudAnchorAsync(candidate.cloudAnchorId) { anchor, state ->
+            // This callback runs on the GL rendering thread.  All Compose state
+            // mutations and non-thread-safe collections (resolvedAnchorIds) must
+            // run on the main thread — use scope.launch for that.
+            // ARCore anchor/earth operations (getGeospatialPose, detach) are safe
+            // on the GL thread and must happen here before the anchor is invalidated.
             if (state == CloudAnchorState.SUCCESS) {
                 val geoPose = earth.getGeospatialPose(anchor.pose)
-                viewModel.onCloudAnchorResolved(
-                    geoPose,
-                    candidate.lat,
-                    candidate.lon,
-                    candidate.cloudAnchorHeading,
-                    candidate.cloudAnchorId!!
-                )
                 anchor.detach()
+                scope.launch {   // → main thread
+                    viewModel.onCloudAnchorResolved(
+                        geoPose,
+                        candidate.lat,
+                        candidate.lon,
+                        candidate.cloudAnchorHeading,
+                        candidate.cloudAnchorId!!
+                    )
+                }
             } else {
                 // Allow retry on failure
-                resolvedAnchorIds.remove(candidate.cloudAnchorId)
-                viewModel.isResolvingCloudAnchor = false
+                scope.launch {   // → main thread
+                    resolvedAnchorIds.remove(candidate.cloudAnchorId)
+                    viewModel.isResolvingCloudAnchor = false
+                }
             }
         }
     }
@@ -421,16 +430,29 @@ fun ARScreen(
                             // ── Per-arrow proximity pruning ────────────────────────────
                             // Detach the single nearest arrow within 2.5 m so arrows
                             // disappear one at a time as the user walks through them.
-                            // This runs independently of node advancement so it never
-                            // triggers a full rebuild or removes more than one arrow.
-                            if (destArrows.isNotEmpty()) {
-                                val closest = destArrows.indexOfFirst { (_, pt) ->
+                            //
+                            // THREADING NOTE: onSessionUpdated runs on the GL thread.
+                            // destArrows is also mutated by the main-thread arrow-rebuild
+                            // LaunchedEffect.  To prevent a race:
+                            //  1. Take a snapshot of the list on the GL thread.
+                            //  2. Detach the anchor immediately (safe on GL thread).
+                            //  3. Dispatch the list mutation to the main thread via
+                            //     scope.launch, removing by object reference rather than
+                            //     index so a concurrent rebuild never causes an
+                            //     IndexOutOfBoundsException or stale removal.
+                            val arrowsSnapshot = destArrows
+                            if (arrowsSnapshot.isNotEmpty()) {
+                                val closest = arrowsSnapshot.indexOfFirst { (_, pt) ->
                                     NavGraphPathfinder.haversine(userLat, userLon, pt.lat, pt.lon) < 2.5
                                 }
                                 if (closest >= 0) {
-                                    destArrows[closest].first.detach()
-                                    destArrows = destArrows.toMutableList()
-                                        .also { it.removeAt(closest) }
+                                    val pairToRemove = arrowsSnapshot[closest]
+                                    pairToRemove.first.detach()
+                                    scope.launch {   // → main thread
+                                        // Filter by reference: safe even if a rebuild has
+                                        // already replaced the list with new Pair objects.
+                                        destArrows = destArrows.filter { it !== pairToRemove }
+                                    }
                                 }
                             }
 
