@@ -105,7 +105,7 @@ internal fun AdminRecordingScreen(
     var sessionEdges     by remember { mutableIntStateOf(0) }
     var lastRecordedNode by remember { mutableStateOf<NavNode?>(null) }
     var lastCaptureTime  by remember { mutableLongStateOf(0L) }
-    var statusMsg        by remember { mutableStateOf("Ready — tap Start Recording, or scan a QR to improve accuracy") }
+    var statusMsg        by remember { mutableStateOf("Tap ▶ to record  ·  scan QR to calibrate") }
     var lastNodeType     by remember { mutableStateOf(NodeType.WAYPOINT) }
 
     // Auto-bridging: snapshot of existing nodes taken at recording-segment start.
@@ -169,7 +169,7 @@ internal fun AdminRecordingScreen(
      */
     fun markLastNodeAs(type: NodeType) {
         val node = lastRecordedNode ?: run {
-            statusMsg = "No waypoint recorded yet — start recording first"
+            statusMsg = "No waypoint yet — start recording first"
             return
         }
         scope.launch {
@@ -205,7 +205,7 @@ internal fun AdminRecordingScreen(
                     }
                 }
                 if (connected > 0) {
-                    statusMsg = "Marked + auto-connected to $connected stair node(s) on other floor(s)"
+                    statusMsg = "Marked + linked to $connected stair(s) on other floor"
                 }
             }
 
@@ -236,7 +236,7 @@ internal fun AdminRecordingScreen(
                     }
                 }
                 if (connected > 0) {
-                    statusMsg = "Stair Mid marked + linked to $connected nearby stair node(s)"
+                    statusMsg = "Stair Mid + linked to $connected nearby node(s)"
                 }
             }
 
@@ -635,7 +635,7 @@ internal fun AdminRecordingScreen(
                             statusMsg = "Recording — walk the corridor"
                         }
                     } else {
-                        statusMsg = "Paused — mark waypoint type or start new segment"
+                        statusMsg = "Paused — mark type or start new segment"
                     }
                 },
                 onFinished         = {

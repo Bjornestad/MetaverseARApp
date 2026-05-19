@@ -17,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.NavNode
@@ -81,7 +82,8 @@ internal fun RecordingTopHud(
                     modifier  = Modifier.weight(1f),
                     color     = Color.White,
                     fontSize  = 12.sp,
-                    maxLines  = 1
+                    maxLines  = 1,
+                    overflow  = TextOverflow.Ellipsis
                 )
                 // Node / edge counter
                 Text(
