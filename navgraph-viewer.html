@@ -244,6 +244,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
   <button class="type-btn" style="--tc:#1d4ed8" onclick="selectByType('STAIR_MIDDLE')">Stair&nbsp;↕</button>
   <button class="type-btn" style="--tc:#15803d" onclick="selectByType('STAIR_BOTTOM')">Stair&nbsp;↓</button>
   <button class="type-btn" style="--tc:#dc2626" onclick="selectIsolated()">Isolated</button>
+  <button class="type-btn" style="--tc:#ca8a04" onclick="selectCloudAnchors()">⚓ Anchored</button>
 
   <div class="sep"></div>
 
@@ -310,6 +311,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
     <div class="leg-row"><div class="leg-dot" style="background:#4ade80"></div> Stair Bottom</div>
     <div class="leg-row"><div class="leg-dot" style="background:#fbbf24;border:2px solid #fbbf24"></div> Selected</div>
     <div class="leg-row"><div class="leg-dot" style="background:#f87171;border:2px dashed #f87171"></div> Disconnected</div>
+    <div class="leg-row"><div class="leg-dot" style="background:transparent;border:2px dashed #fde047"></div> Cloud anchor</div>
     <strong style="margin-top:6px">Edges</strong>
     <div class="leg-row"><div class="leg-line" style="background:#38bdf8"></div> Normal</div>
     <div class="leg-line" style="background:transparent"></div>
@@ -348,6 +350,7 @@ const PALETTE = {
     edgeNormal:  '#38bdf8',
     edgeCross:   '#f87171',
     edgeStair:   '#c084fc',
+    anchorRing:  '#fde047',
   },
   light: {
     floor:       ['#0369a1','#be185d','#15803d','#b45309','#6d28d9','#c2410c','#a21caf'],
@@ -358,6 +361,7 @@ const PALETTE = {
     edgeNormal:  '#2563eb',
     edgeCross:   '#dc2626',
     edgeStair:   '#7c3aed',
+    anchorRing:  '#ca8a04',
   },
 };
 
@@ -490,6 +494,50 @@ function render() {
     });
 
     layerGroup.addLayer(circle);
+
+    // ── Cloud anchor halo + bearing arrow ────────────────────────────
+    // Use loose truthiness check so both null and undefined (stale JSON) are skipped
+    if (n.cloudAnchorId) {
+      const halo = L.circleMarker([n.lat, n.lon], {
+        radius: r + 6, fillColor: 'transparent', fillOpacity: 0,
+        color: p.anchorRing, weight: 2, opacity: .9, dashArray: '4 3'
+      });
+      halo.on('click', ev => {
+        L.DomEvent.stopPropagation(ev);
+        if (mode === 'select') toggleSelect(n.id);
+        else if (mode === 'view') showNodeInfo(n, find(n.id), size[find(n.id)], isMain);
+      });
+      layerGroup.addLayer(halo);
+
+      // Bearing arrow — shown when heading was recorded
+      if (n.cloudAnchorHeading != null) {
+        const hdg    = n.cloudAnchorHeading;
+        const hdgRad = hdg * Math.PI / 180;
+        const cosLat = Math.cos(n.lat * Math.PI / 180);
+
+        // Shaft: node centre → tip (4 m ahead)
+        const shaftM = 4.0;
+        const tipLat = n.lat + shaftM * Math.cos(hdgRad) / 111111;
+        const tipLon = n.lon + shaftM * Math.sin(hdgRad) / (111111 * cosLat);
+
+        // Arrowhead: two arms 1.5 m long at ±145° from heading
+        const armM = 1.5;
+        const arm = (off) => {
+          const a = (hdg + off) * Math.PI / 180;
+          return [tipLat + armM * Math.cos(a) / 111111,
+                  tipLon + armM * Math.sin(a) / (111111 * cosLat)];
+        };
+
+        layerGroup.addLayer(L.polyline(
+          [[n.lat, n.lon], [tipLat, tipLon]],
+          { color: p.anchorRing, weight: 2, opacity: .9 }
+        ));
+        layerGroup.addLayer(L.polyline(
+          [arm(145), [tipLat, tipLon], arm(-145)],
+          { color: p.anchorRing, weight: 2, opacity: .9 }
+        ));
+      }
+    }
   });
 }
 
@@ -545,6 +593,20 @@ function selectByType(typeName) {
   });
   updateSelUI(); render();
   setStatus(`Selected ${selected.size} ${typeName.replace('_', ' ').toLowerCase()} node(s)`);
+}
+
+/** Select all visible nodes that have a hosted cloud anchor ID. */
+function selectCloudAnchors() {
+  if (!graphData) return;
+  setMode('select');
+  graphData.nodes.forEach(n => {
+    if (activeFloors.size && !activeFloors.has(String(n.floor))) return;
+    if (n.cloudAnchorId) selected.add(n.id);
+  });
+  updateSelUI(); render();
+  setStatus(selected.size > 0
+    ? `Selected ${selected.size} cloud-anchored node(s)`
+    : '⚠ No cloud anchor IDs found — re-export navgraph.json from the app first');
 }
 
 /** Select all visible nodes that are NOT in the largest graph component. */
@@ -718,6 +780,12 @@ let fillPolyLayer    = null;  // L.Polyline – open-polygon preview while drawi
 let fillPolyClose    = null;  // L.Polygon  – closed preview shown in fill panel
 let fillPolyMarkers  = [];    // L.CircleMarker[] – vertex dots
 let fillClickTimer   = null;  // debounce timer to separate click from dblclick
+
+/** Human-readable cardinal/intercardinal label for a compass heading (0–360°). */
+function bearingLabel(deg) {
+  const dirs = ['N','NE','E','SE','S','SW','W','NW'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 45) % 8];
+}
 
 /** Great-circle distance in metres. */
 function haversineM(lat1, lon1, lat2, lon2) {
@@ -1073,15 +1141,23 @@ function buildFloorChips(floors) {
 // INFO PANEL
 // ═══════════════════════════════════════════════════════════════════════════
 function showNodeInfo(n, comp, sz, isMain) {
+  const anchorVal = n.cloudAnchorId
+    ? `<span style="font-size:10px;color:#fde047;word-break:break-all">${n.cloudAnchorId}</span>`
+    : '—';
+  const headingVal = n.cloudAnchorHeading != null
+    ? `${n.cloudAnchorHeading.toFixed(1)}° (${bearingLabel(n.cloudAnchorHeading)})`
+    : '—';
   showPanel('Node', [
-    ['Type',      n.type || 'WAYPOINT'],
-    ['Floor',     n.floor ?? '—'],
-    ['Lat',       n.lat.toFixed(8)],
-    ['Lon',       n.lon.toFixed(8)],
-    ['Alt',       n.alt != null ? n.alt.toFixed(2)+'m' : '—'],
-    ['QR link',   n.anchorQrId || '—'],
-    ['Component', isMain ? `Main (${sz})` : `⚠ Isolated (${sz})`],
-    ['ID',        `<span style="font-size:10px;color:#555">${n.id}</span>`],
+    ['Type',           n.type || 'WAYPOINT'],
+    ['Floor',          n.floor ?? '—'],
+    ['Lat',            n.lat.toFixed(8)],
+    ['Lon',            n.lon.toFixed(8)],
+    ['Alt',            n.alt != null ? n.alt.toFixed(2)+'m' : '—'],
+    ['QR link',        n.anchorQrId || '—'],
+    ['Cloud anchor',   anchorVal],
+    ['Anchor heading', headingVal],
+    ['Component',      isMain ? `Main (${sz})` : `⚠ Isolated (${sz})`],
+    ['ID',             `<span style="font-size:10px;color:#555">${n.id}</span>`],
   ]);
 }
 function showEdgeInfo(e, a, b) {

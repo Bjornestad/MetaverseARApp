@@ -9,6 +9,7 @@ import androidx.room.Room
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.MIGRATION_3_4
 import com.example.metaversearapp.data.MIGRATION_4_5
+import com.example.metaversearapp.data.MIGRATION_5_6
 import com.example.metaversearapp.ui.ARScreen
 import com.example.metaversearapp.ui.AdminScreen
 import com.example.metaversearapp.ui.theme.MetaverseARappTheme
@@ -19,7 +20,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "ar-db")
-            .addMigrations(MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .fallbackToDestructiveMigration(true)
             .build()
 

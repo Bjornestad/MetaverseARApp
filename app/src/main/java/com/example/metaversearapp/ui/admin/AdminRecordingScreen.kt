@@ -286,6 +286,10 @@ internal fun AdminRecordingScreen(
         cloudHostState = HostState.Hosting
         statusMsg      = "Hosting cloud anchor…"
 
+        // Snapshot heading now (before the async callback fires) so we capture
+        // the direction the device was actually pointing when hosting.
+        val headingAtHost = geospatialPose?.heading
+
         val anchor = session.createAnchor(pose)
         session.hostCloudAnchorAsync(anchor, 1) { cloudId, state ->
             when (state) {
@@ -296,7 +300,10 @@ internal fun AdminRecordingScreen(
                     cloudAnchorVisuals = cloudAnchorVisuals + anchor
                     lastRecordedNode?.let { node ->
                         scope.launch {
-                            val updated = node.copy(cloudAnchorId = cloudId)
+                            val updated = node.copy(
+                                cloudAnchorId      = cloudId,
+                                cloudAnchorHeading = headingAtHost
+                            )
                             db.navDao().updateNode(updated)
                             lastRecordedNode = updated
                         }

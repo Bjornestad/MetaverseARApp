@@ -46,5 +46,11 @@ data class NavNode(
      *  Non-null only for nodes that an admin has explicitly hosted.
      *  Used by the user-side to resolve the anchor and get a precise
      *  calibration offset, bypassing GPS inaccuracy. */
-    val cloudAnchorId: String? = null
+    val cloudAnchorId: String? = null,
+
+    /** Compass heading (degrees, 0 = north, clockwise) of the device at the
+     *  moment the cloud anchor was hosted.  Stored so the viewer can draw a
+     *  direction indicator and so the app knows which way the anchor "faces"
+     *  for alignment purposes. Null for nodes without a hosted anchor. */
+    val cloudAnchorHeading: Double? = null
 )
