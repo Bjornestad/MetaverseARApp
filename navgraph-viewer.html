@@ -182,6 +182,20 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
 .leg-row { display: flex; align-items: center; gap: 7px; }
 .leg-dot { width: 12px; height: 12px; border-radius: 50%; border: 1px solid var(--leg-dot-bd); flex-shrink: 0; }
 .leg-line { width: 22px; height: 2px; flex-shrink: 0; }
+/* Stair symbol overlay on map dots */
+.stair-label {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  pointer-events: none;
+  text-shadow: 0 0 3px #000, 0 0 3px #000;
+}
+.stair-label::before { display: none !important; }
 
 /* ── Fill panel ── */
 #fill-panel {
@@ -213,6 +227,40 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
   background: var(--btn-bg); color: var(--btn-fg); cursor: pointer; font-size: 12px;
 }
 .fill-cancel:hover { border-color: var(--btn-hover-bd); }
+
+/* ── Node edit form (inline in info panel) ── */
+.node-edit-row {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 7px; font-size: 12px;
+}
+.node-edit-row label { color: var(--panel-key); white-space: nowrap; min-width: 44px; }
+.node-edit-inp {
+  width: 140px; padding: 3px 7px; border-radius: 5px; font-size: 12px;
+  border: 1px solid var(--btn-bd); background: var(--btn-bg); color: var(--btn-fg);
+  text-align: right;
+}
+.node-edit-inp:focus { outline: none; border-color: #3b82f6; }
+.node-edit-sel {
+  width: 140px; padding: 3px 7px; border-radius: 5px; font-size: 12px;
+  border: 1px solid var(--btn-bd); background: var(--btn-bg); color: var(--btn-fg);
+}
+.node-edit-btns { display: flex; gap: 6px; margin-top: 10px; }
+.node-edit-save {
+  flex: 1; padding: 5px; border-radius: 6px; border: 1px solid #16a34a;
+  background: #16a34a; color: #fff; cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.node-edit-save:hover { background: #15803d; }
+.node-edit-cancel {
+  flex: 1; padding: 5px; border-radius: 6px; border: 1px solid var(--btn-bd);
+  background: var(--btn-bg); color: var(--btn-fg); cursor: pointer; font-size: 12px;
+}
+.node-edit-cancel:hover { border-color: var(--btn-hover-bd); }
+/* action buttons below the info table */
+.info-action-btns { display: flex; gap: 6px; margin-top: 10px; }
+.info-action-btn {
+  flex: 1; padding: 4px; border-radius: 6px; background: transparent;
+  cursor: pointer; font-size: 11px; transition: all .15s;
+}
 </style>
 </head>
 <body>
@@ -416,6 +464,9 @@ let drawRect     = null; // L.Rectangle preview
 let facingEditNodeId = null; // node ID whose facingDeg is being edited
 let facingPreviewGroup = null; // L.LayerGroup for the live arrow preview
 
+// Move-node state
+let moveNodeId = null; // node ID being repositioned via click-on-map
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAP SETUP
 // ═══════════════════════════════════════════════════════════════════════════
@@ -554,6 +605,7 @@ function render() {
     });
 
     circle.on('click', ev => {
+      if (moveNodeId) return; // let map.on('click') handle node placement
       L.DomEvent.stopPropagation(ev);
       if (mode === 'select') {
         toggleSelect(n.id);
@@ -564,6 +616,12 @@ function render() {
 
     layerGroup.addLayer(circle);
 
+    // ── Stair type symbol (↑ ↕ ↓) overlaid on the dot ────────────────
+    if (!isHidden && (n.type === 'STAIR_TOP' || n.type === 'STAIR_MIDDLE' || n.type === 'STAIR_BOTTOM')) {
+      const sym = n.type === 'STAIR_TOP' ? '↑' : n.type === 'STAIR_BOTTOM' ? '↓' : '↕';
+      circle.bindTooltip(sym, { permanent: true, direction: 'center', className: 'stair-label' });
+    }
+
     // ── Cloud anchor halo + bearing arrow ────────────────────────────
     if (!isHidden && n.cloudAnchorId) {
       const halo = L.circleMarker([n.lat, n.lon], {
@@ -571,6 +629,7 @@ function render() {
         color: p.anchorRing, weight: 2, opacity: .9, dashArray: '4 3'
       });
       halo.on('click', ev => {
+        if (moveNodeId) return; // let map.on('click') handle node placement
         L.DomEvent.stopPropagation(ev);
         if (mode === 'select') toggleSelect(n.id);
         else if (mode === 'view') showNodeInfo(n, find(n.id), size[find(n.id)], isMain);
@@ -826,6 +885,7 @@ function setMode(m) {
     map.doubleClickZoom.enable();
   }
   if (facingEditNodeId) cancelFacingEdit();
+  if (moveNodeId)      cancelNodeMove();
   if (m !== 'select') { selected.clear(); updateSelUI(); render(); }
   if (m !== 'fill') { hideFillPanel(); clearFillPoly(); }
 }
@@ -1283,6 +1343,25 @@ function showNodeInfo(n, comp, sz, isMain) {
   ];
   if (n.anchorQrId) rows.splice(6, 0, ['QR facing', facingVal]);
   showPanel('Node', rows);
+
+  // ── Edit / Move action buttons ─────────────────────────────────────────
+  const panel = document.getElementById('info-panel');
+  // Remove any previously appended button row before adding a fresh one
+  panel.querySelectorAll('.info-action-btns').forEach(el => el.remove());
+  const btns  = document.createElement('div');
+  btns.className = 'info-action-btns';
+  btns.innerHTML =
+    `<button class="info-action-btn"
+        style="border:1px solid #3b82f6;color:#3b82f6;"
+        onmouseover="this.style.background='#3b82f620'"
+        onmouseout="this.style.background='transparent'"
+        onclick="showNodeEdit('${n.id}')">✏ Edit</button>` +
+    `<button class="info-action-btn"
+        style="border:1px solid #2dd4bf;color:#2dd4bf;"
+        onmouseover="this.style.background='#2dd4bf20'"
+        onmouseout="this.style.background='transparent'"
+        onclick="startNodeMove('${n.id}')">📍 Move</button>`;
+  panel.appendChild(btns);
 }
 function showEdgeInfo(e, a, b) {
   showPanel('Edge', [
@@ -1347,9 +1426,33 @@ map.on('mousemove', e => {
   setStatus(`🧭 Facing: ${hdg.toFixed(1)}° (${bearingLabel(hdg)}) — click to confirm · Esc to cancel`);
 });
 
-// Confirm on click
+// Confirm on click — handles both facing-edit and node-move
 map.on('click', e => {
   if (mode === 'fill') return; // fill click handler runs first via its own listener
+
+  // ── Node move: relocate to clicked position ──────────────────────────────
+  if (moveNodeId) {
+    const nodeId = moveNodeId;
+    const n      = graphData?.nodes.find(x => x.id === nodeId);
+    if (n) {
+      pushUndo();
+      n.lat = e.latlng.lat;
+      n.lon = e.latlng.lng;
+      // Delete old edges and re-create to nodes within 6 m of the new position
+      const moveSnapM = 6.0;
+      reSnapNodeEdges(nodeId, n, moveSnapM);
+      moveNodeId = null;
+      document.getElementById('map').classList.remove('mode-facing');
+      render();
+      updateStats();
+      const { find, size, main } = buildComponents(graphData.nodes, graphData.edges);
+      showNodeInfo(n, find(n.id), size[find(n.id)], find(n.id) === main);
+      setStatus(`✅ Node moved · edges re-snapped within ${moveSnapM} m · export to save`);
+    }
+    return;
+  }
+
+  // ── Facing edit: set QR facing direction ────────────────────────────────
   if (!facingEditNodeId) return;
   const n = graphData?.nodes.find(x => x.id === facingEditNodeId);
   if (!n) return;
@@ -1365,6 +1468,174 @@ map.on('click', e => {
   showNodeInfo(n, find(n.id), size[find(n.id)], find(n.id) === main);
   setStatus(`✅ QR facing set to ${hdg.toFixed(1)}° (${bearingLabel(hdg)}) — export to save`);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NODE EDIT (inline form)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Delete all edges connected to `nodeId`, then re-create bidirectional edges
+ * to every other node within `snapM` metres of `n`'s current position.
+ * Same-floor-only snapping is intentionally NOT enforced here so that
+ * stair nodes (which bridge floors) are handled correctly.
+ */
+function reSnapNodeEdges(nodeId, n, snapM) {
+  // Remove every edge that touches this node
+  graphData.edges = graphData.edges.filter(e => e.fromId !== nodeId && e.toId !== nodeId);
+
+  // Build a de-dup set from the edges that remain (edge keys are order-sensitive here
+  // because we'll add both directions explicitly)
+  const seen = new Set(graphData.edges.map(e => `${e.fromId}|${e.toId}`));
+
+  const newEdges = [];
+  for (const other of graphData.nodes) {
+    if (other.id === nodeId) continue;
+    const d = haversineM(n.lat, n.lon, other.lat, other.lon);
+    if (d <= snapM) {
+      const fwd = `${nodeId}|${other.id}`;
+      const rev = `${other.id}|${nodeId}`;
+      if (!seen.has(fwd)) { newEdges.push({ fromId: nodeId,   toId: other.id, weight: d }); seen.add(fwd); }
+      if (!seen.has(rev)) { newEdges.push({ fromId: other.id, toId: nodeId,   weight: d }); seen.add(rev); }
+    }
+  }
+  graphData.edges.push(...newEdges);
+}
+
+/** Replace the info panel content with an editable form for this node. */
+function showNodeEdit(nodeId) {
+  const n = graphData?.nodes.find(x => x.id === nodeId);
+  if (!n) return;
+
+  const typeOptions = ['WAYPOINT','DOOR','STAIR_TOP','STAIR_MIDDLE','STAIR_BOTTOM']
+    .map(t => `<option value="${t}"${(n.type || 'WAYPOINT') === t ? ' selected' : ''}>${t}</option>`)
+    .join('');
+
+  document.getElementById('info-title').innerHTML =
+    `Edit Node <span style="font-size:10px;color:var(--panel-key);font-weight:normal">…${nodeId.slice(-8)}</span>`;
+  document.getElementById('info-table').innerHTML = `
+    <tr><td colspan="2" style="padding:0">
+      <div class="node-edit-row" style="margin-top:4px">
+        <label>Type</label>
+        <select id="edit-type" class="node-edit-sel">${typeOptions}</select>
+      </div>
+      <div class="node-edit-row">
+        <label>Floor</label>
+        <input id="edit-floor" class="node-edit-inp" type="text" value="${n.floor ?? '1'}">
+      </div>
+      <div class="node-edit-row">
+        <label>Lat</label>
+        <input id="edit-lat" class="node-edit-inp" type="number" step="0.00000001" value="${n.lat.toFixed(8)}">
+      </div>
+      <div class="node-edit-row">
+        <label>Lon</label>
+        <input id="edit-lon" class="node-edit-inp" type="number" step="0.00000001" value="${n.lon.toFixed(8)}">
+      </div>
+      <div class="node-edit-row">
+        <label>Alt</label>
+        <input id="edit-alt" class="node-edit-inp" type="number" step="0.01" value="${(n.alt ?? 0).toFixed(2)}">
+      </div>
+      <div class="node-edit-row">
+        <label>Connect radius (m)</label>
+        <input id="edit-snap" class="node-edit-inp" type="number" step="0.5" min="0.5" value="6.0">
+      </div>
+      <div class="node-edit-btns">
+        <button class="node-edit-save"   onclick="saveNodeEdit('${nodeId}')">✔ Save</button>
+        <button class="node-edit-cancel" onclick="cancelNodeEdit('${nodeId}')">✕ Cancel</button>
+      </div>
+    </td></tr>`;
+  document.getElementById('info-panel').style.display = 'block';
+  document.getElementById('edit-lat').focus();
+}
+
+/**
+ * Commit the edited values, recalculate edge weights for moved nodes,
+ * and return the panel to read-only view.
+ */
+function saveNodeEdit(nodeId) {
+  const n = graphData?.nodes.find(x => x.id === nodeId);
+  if (!n) return;
+
+  const newLat   = parseFloat(document.getElementById('edit-lat').value);
+  const newLon   = parseFloat(document.getElementById('edit-lon').value);
+  const newAlt   = parseFloat(document.getElementById('edit-alt').value);
+  const newFloor = (document.getElementById('edit-floor').value || '').trim() || '1';
+  const newType  = document.getElementById('edit-type').value;
+
+  if (!isFinite(newLat) || !isFinite(newLon) || !isFinite(newAlt)) {
+    setStatus('⚠ Invalid coordinates — check inputs'); return;
+  }
+  if (newLat < -90 || newLat > 90 || newLon < -180 || newLon > 180) {
+    setStatus('⚠ Lat/lon out of range (-90…90 / -180…180)'); return;
+  }
+
+  pushUndo();
+
+  const posChanged = newLat !== n.lat || newLon !== n.lon;
+  n.lat   = newLat;
+  n.lon   = newLon;
+  n.alt   = newAlt;
+  n.floor = newFloor;
+  n.type  = newType;
+
+  // When position changed: delete all edges connected to this node and
+  // re-create bidirectional edges to nodes within the connect radius.
+  if (posChanged) {
+    const snapM = Math.max(0.5, parseFloat(document.getElementById('edit-snap')?.value) || 6.0);
+    reSnapNodeEdges(nodeId, n, snapM);
+    setStatus(`✅ Node updated · edges re-snapped within ${snapM} m · export to save`);
+  } else {
+    setStatus('✅ Node properties updated · export to save');
+  }
+
+  // If new floor is not already in the chip bar, add it
+  if (!activeFloors.has(String(newFloor))) {
+    activeFloors.add(String(newFloor));
+    buildFloorChips([...new Set(graphData.nodes.map(x => String(x.floor ?? '1')))]);
+  }
+
+  render();
+  updateStats();
+
+  // Re-open read-only info panel with the updated values
+  const { find, size, main } = buildComponents(graphData.nodes, graphData.edges);
+  showNodeInfo(n, find(n.id), size[find(n.id)], find(n.id) === main);
+}
+
+/** Discard edits and return the panel to read-only view. */
+function cancelNodeEdit(nodeId) {
+  const n = graphData?.nodes.find(x => x.id === nodeId);
+  if (!n) return;
+  const { find, size, main } = buildComponents(graphData.nodes, graphData.edges);
+  showNodeInfo(n, find(n.id), size[find(n.id)], find(n.id) === main);
+  setStatus('Edit cancelled');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NODE MOVE (click-on-map reposition)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Enter move mode: the next map click will relocate this node. */
+function startNodeMove(nodeId) {
+  moveNodeId = nodeId;
+  document.getElementById('info-panel').style.display = 'none';
+  document.getElementById('map').classList.add('mode-facing'); // crosshair cursor
+  setStatus('📍 Click the map to place the node at a new position — Esc to cancel');
+}
+
+/** Cancel move without saving. */
+function cancelNodeMove() {
+  if (!moveNodeId) return;
+  const nodeId = moveNodeId;
+  moveNodeId   = null;
+  document.getElementById('map').classList.remove('mode-facing');
+  render();
+  const n = graphData?.nodes.find(x => x.id === nodeId);
+  if (n) {
+    const { find, size, main } = buildComponents(graphData.nodes, graphData.edges);
+    showNodeInfo(n, find(n.id), size[find(n.id)], find(n.id) === main);
+  }
+  setStatus('Node move cancelled');
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STATS & STATUS
@@ -1409,7 +1680,7 @@ document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size) deleteSelected();
   if (e.key === 'h' || e.key === 'H') { if (selected.size) hideSelected(); else unhideAll(); }
-  if (e.key === 'Escape') { cancelFacingEdit(); deselect(); setMode('view'); }
+  if (e.key === 'Escape') { cancelFacingEdit(); cancelNodeMove(); deselect(); setMode('view'); }
   if (e.key === 'z' && (e.ctrlKey||e.metaKey)) undo();
   if (e.key === '1') setMode('view');
   if (e.key === '2') setMode('select');
