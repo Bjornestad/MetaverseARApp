@@ -67,9 +67,25 @@ internal fun AdminHubScreen(
             val result = NavGistSync.download()
             result.onSuccess { export ->
                 withContext(Dispatchers.IO) {
-                    // Upsert — existing IDs get overwritten with identical Gist data (no-op),
-                    // locally recorded nodes (not yet in Gist) are untouched.
-                    export.nodes.forEach { db.navDao().insertNode(it) }
+                    // Load local nodes once for O(1) lookup during merge.
+                    val localNodes = db.navDao().getAllNodes().associateBy { it.id }
+
+                    export.nodes.forEach { gistNode ->
+                        val local = localNodes[gistNode.id]
+                        // Door assignments are admin overrides. If the local DB already has an
+                        // explicit anchorQrId that differs from what the Gist says, keep the
+                        // local value — the admin intentionally set it and the Gist hasn't
+                        // received the upload yet (or another device set it differently).
+                        // For every other field, the Gist is authoritative.
+                        val nodeToInsert = if (local?.anchorQrId != null &&
+                                               local.anchorQrId != gistNode.anchorQrId) {
+                            gistNode.copy(anchorQrId = local.anchorQrId, label = local.label)
+                        } else {
+                            gistNode
+                        }
+                        db.navDao().insertNode(nodeToInsert)
+                    }
+
                     export.edges.forEach { db.navDao().insertEdge(it) }
                     // Floor altitudes from the Gist are the canonical values — upsert so all
                     // devices share the same reference altitude for each floor.
