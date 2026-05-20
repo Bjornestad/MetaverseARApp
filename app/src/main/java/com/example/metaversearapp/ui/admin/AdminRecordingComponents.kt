@@ -391,6 +391,158 @@ private fun RecordingActionBar(
     }
 }
 
+// ── Door assignment management dialog ──────────────────────────────────────────
+
+/**
+ * Hub-screen dialog that lists every DOOR node with its current linked room.
+ * The admin can re-link any door to a different room, or unlink it entirely.
+ */
+@Composable
+internal fun DoorManagementDialog(
+    doorNodes: List<NavNode>,
+    qrMap:     Map<String, QrLocation>,
+    onReLink:  (NavNode) -> Unit,
+    onUnLink:  (NavNode) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor   = Color(0xFF1E1E1E),
+        title = {
+            Text(
+                "Door Assignments",
+                color      = Color(0xFF64FFDA),
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            if (doorNodes.isEmpty()) {
+                Text(
+                    "No door nodes recorded yet.",
+                    color    = Color.Gray,
+                    fontSize = 13.sp,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            } else {
+                Column(
+                    modifier            = Modifier
+                        .heightIn(max = 380.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    doorNodes.forEach { node ->
+                        val linkedQr   = node.anchorQrId?.let { qrMap[it] }
+                        val isLinked   = node.anchorQrId != null
+                        val isOrphaned = isLinked && linkedQr == null // QR removed from DB
+
+                        Card(
+                            colors   = CardDefaults.cardColors(containerColor = Color(0xFF2A2A2A)),
+                            shape    = RoundedCornerShape(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier              = Modifier
+                                    .padding(horizontal = 10.dp, vertical = 8.dp)
+                                    .fillMaxWidth(),
+                                verticalAlignment     = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                // ── Info ────────────────────────────────────
+                                Column(modifier = Modifier.weight(1f)) {
+                                    when {
+                                        linkedQr != null -> {
+                                            Text(
+                                                linkedQr.name,
+                                                color      = Color.White,
+                                                fontSize   = 13.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                buildString {
+                                                    if (linkedQr.building.isNotBlank()) append("${linkedQr.building}  ·  ")
+                                                    append("Floor ${node.floor}")
+                                                },
+                                                color    = Color.Gray,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                        isOrphaned -> {
+                                            Text(
+                                                "Linked to deleted room",
+                                                color      = Color(0xFFFF8A65),
+                                                fontSize   = 13.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                "Floor ${node.floor}  ·  ID …${node.anchorQrId?.takeLast(8)}",
+                                                color    = Color.Gray,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                        else -> {
+                                            Text(
+                                                "Unlinked",
+                                                color      = Color(0xFFFFCC80),
+                                                fontSize   = 13.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                "Floor ${node.floor}",
+                                                color    = Color.Gray,
+                                                fontSize = 11.sp
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // ── Re-link button ───────────────────────────
+                                OutlinedIconButton(
+                                    onClick  = { onReLink(node) },
+                                    modifier = Modifier.size(32.dp),
+                                    colors   = IconButtonDefaults.outlinedIconButtonColors(
+                                        contentColor = Color(0xFF64FFDA)
+                                    ),
+                                    border   = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f))
+                                ) {
+                                    Icon(
+                                        Icons.Default.Edit,
+                                        contentDescription = "Re-link",
+                                        modifier           = Modifier.size(14.dp)
+                                    )
+                                }
+
+                                // ── Unlink button (only when linked) ─────────
+                                if (isLinked) {
+                                    OutlinedIconButton(
+                                        onClick  = { onUnLink(node) },
+                                        modifier = Modifier.size(32.dp),
+                                        colors   = IconButtonDefaults.outlinedIconButtonColors(
+                                            contentColor = Color(0xFFFF6B6B)
+                                        ),
+                                        border   = BorderStroke(1.dp, Color(0xFFFF6B6B).copy(alpha = 0.6f))
+                                    ) {
+                                        Icon(
+                                            Icons.Default.LinkOff,
+                                            contentDescription = "Unlink",
+                                            modifier           = Modifier.size(14.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton  = {},
+        dismissButton  = {
+            TextButton(onClick = onDismiss) {
+                Text("Close", color = Color.Gray)
+            }
+        }
+    )
+}
+
 // ── Door → QR link picker dialog ───────────────────────────────────────────────
 
 /**
@@ -459,7 +611,7 @@ internal fun DoorLinkPickerDialog(
                 // ── Results list ─────────────────────────────────────────────
                 if (filtered.isEmpty()) {
                     Text(
-                        "No rooms match "$query"",
+                        "No rooms match \"$query\"",
                         color    = Color.Gray,
                         fontSize = 13.sp,
                         modifier = Modifier.padding(vertical = 8.dp)

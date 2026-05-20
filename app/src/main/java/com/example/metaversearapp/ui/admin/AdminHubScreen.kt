@@ -20,6 +20,10 @@ import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphExport
+import com.example.metaversearapp.data.NavGraphPathfinder
+import com.example.metaversearapp.data.NavNode
+import com.example.metaversearapp.data.NodeType
+import com.example.metaversearapp.data.QrLocation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,6 +45,14 @@ internal fun AdminHubScreen(
     var exportStatus by remember { mutableStateOf("") }
     var uploadStatus by remember { mutableStateOf("") }
     var isUploading  by remember { mutableStateOf(false) }
+
+    // Door assignment management
+    var doorNodes        by remember { mutableStateOf<List<NavNode>>(emptyList()) }
+    var allQrLocations   by remember { mutableStateOf<List<QrLocation>>(emptyList()) }
+    var showDoorMgmtDlg  by remember { mutableStateOf(false) }
+    var reLinkTarget     by remember { mutableStateOf<NavNode?>(null) }
+    var showReLinkDlg    by remember { mutableStateOf(false) }
+    var reLinkCandidates by remember { mutableStateOf<List<Pair<QrLocation, Double>>>(emptyList()) }
 
     // Gist sync state — only shows spinner on the very first entry this session
     var isSyncing   by remember { mutableStateOf(!adminGistSyncDone) }
@@ -68,9 +80,11 @@ internal fun AdminHubScreen(
             )
         }
         // Refresh counts from DB (covers both first entry and post-recording re-entry)
-        nodeCount = db.navDao().nodeCount()
-        edgeCount = db.navDao().edgeCount()
-        isSyncing = false
+        nodeCount      = db.navDao().nodeCount()
+        edgeCount      = db.navDao().edgeCount()
+        doorNodes      = db.navDao().getNodesByType(NodeType.DOOR.name)
+        allQrLocations = db.qrDao().getAll()
+        isSyncing      = false
     }
 
     // Show a full-screen spinner until the sync resolves
@@ -236,6 +250,30 @@ internal fun AdminHubScreen(
                 Text("Clear Graph Data")
             }
 
+            // Manage door assignments
+            val unlinkedDoors = doorNodes.count { it.anchorQrId == null }
+            OutlinedButton(
+                onClick  = { showDoorMgmtDlg = true },
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape    = RoundedCornerShape(12.dp),
+                colors   = ButtonDefaults.outlinedButtonColors(
+                    contentColor = if (unlinkedDoors > 0) Color(0xFFFFA726) else Color(0xFF64FFDA)
+                ),
+                border   = androidx.compose.foundation.BorderStroke(
+                    1.dp,
+                    if (unlinkedDoors > 0) Color(0xFFFFA726) else Color(0xFF64FFDA)
+                )
+            ) {
+                Icon(Icons.Default.DoorFront, contentDescription = null)
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    if (unlinkedDoors > 0)
+                        "Manage Doors  ·  $unlinkedDoors unlinked"
+                    else
+                        "Manage Door Assignments (${doorNodes.size})"
+                )
+            }
+
             // Instructions
             Card(
                 colors   = CardDefaults.cardColors(containerColor = Color(0xFF1A2A1A)),
@@ -254,6 +292,54 @@ internal fun AdminHubScreen(
                 }
             }
         }
+    }
+
+    // Door management dialog
+    if (showDoorMgmtDlg) {
+        DoorManagementDialog(
+            doorNodes = doorNodes,
+            qrMap     = allQrLocations.associateBy { it.qrID },
+            onReLink  = { node ->
+                reLinkTarget     = node
+                reLinkCandidates = allQrLocations
+                    .map { qr -> qr to NavGraphPathfinder.haversine(node.lat, node.lon, qr.lat, qr.lon) }
+                    .sortedBy { (_, d) -> d }
+                showDoorMgmtDlg  = false
+                showReLinkDlg    = true
+            },
+            onUnLink  = { node ->
+                scope.launch {
+                    db.navDao().updateNode(node.copy(anchorQrId = null, label = ""))
+                    doorNodes = db.navDao().getNodesByType(NodeType.DOOR.name)
+                }
+            },
+            onDismiss = { showDoorMgmtDlg = false }
+        )
+    }
+
+    // Room picker for re-linking a specific door
+    if (showReLinkDlg) {
+        val capturedTarget = reLinkTarget
+        DoorLinkPickerDialog(
+            candidates = reLinkCandidates,
+            onLink     = { qr ->
+                showReLinkDlg    = false
+                reLinkTarget     = null
+                reLinkCandidates = emptyList()
+                if (capturedTarget != null) {
+                    scope.launch {
+                        db.navDao().updateNode(capturedTarget.copy(anchorQrId = qr.qrID, label = qr.name))
+                        doorNodes = db.navDao().getNodesByType(NodeType.DOOR.name)
+                    }
+                }
+            },
+            onDismiss  = {
+                showReLinkDlg    = false
+                reLinkTarget     = null
+                reLinkCandidates = emptyList()
+                showDoorMgmtDlg  = true  // return to management dialog
+            }
+        )
     }
 
     // Clear confirmation dialog

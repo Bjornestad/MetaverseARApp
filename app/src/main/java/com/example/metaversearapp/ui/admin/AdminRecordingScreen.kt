@@ -253,6 +253,8 @@ internal fun AdminRecordingScreen(
                     doorLinkCandidates = candidates
                     showDoorLinkDialog = true
                     statusMsg = "Choose which room this door belongs to…"
+                } else {
+                    statusMsg = "Marked as Door — no rooms in database yet (upload QR data first)"
                 }
             }
         }
