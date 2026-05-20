@@ -10,7 +10,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -394,8 +394,9 @@ private fun RecordingActionBar(
 // ── Door → QR link picker dialog ───────────────────────────────────────────────
 
 /**
- * Dialog shown after the admin marks a node as DOOR and nearby QR anchors
- * are found.  The admin picks which room the door belongs to, or skips.
+ * Dialog shown after the admin marks a node as DOOR.
+ * All known rooms are shown in a searchable, scrollable list so the admin can
+ * find and link any room regardless of its distance from the door node.
  */
 @Composable
 internal fun DoorLinkPickerDialog(
@@ -403,6 +404,17 @@ internal fun DoorLinkPickerDialog(
     onLink:     (QrLocation) -> Unit,
     onDismiss:  () -> Unit,
 ) {
+    var query by remember { mutableStateOf("") }
+
+    val filtered = remember(query, candidates) {
+        if (query.isBlank()) candidates
+        else candidates.filter { (qr, _) ->
+            qr.name.contains(query, ignoreCase = true) ||
+            qr.building.contains(query, ignoreCase = true) ||
+            qr.floor.contains(query, ignoreCase = true)
+        }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor   = Color(0xFF1E1E1E),
@@ -414,32 +426,82 @@ internal fun DoorLinkPickerDialog(
             )
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    "Nearby rooms — choose the one this door leads to:",
-                    color    = Color.Gray,
-                    fontSize = 13.sp
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+
+                // ── Search field ─────────────────────────────────────────────
+                OutlinedTextField(
+                    value            = query,
+                    onValueChange    = { query = it },
+                    placeholder      = { Text("Search rooms…", color = Color.Gray) },
+                    singleLine       = true,
+                    leadingIcon      = {
+                        Icon(
+                            Icons.Default.Search,
+                            contentDescription = null,
+                            tint = Color.Gray
+                        )
+                    },
+                    trailingIcon     = if (query.isNotEmpty()) {{
+                        IconButton(onClick = { query = "" }) {
+                            Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray)
+                        }
+                    }} else null,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = Color(0xFF64FFDA),
+                        unfocusedBorderColor = Color(0xFF444444),
+                        focusedTextColor     = Color.White,
+                        unfocusedTextColor   = Color.White,
+                        cursorColor          = Color(0xFF64FFDA)
+                    ),
+                    modifier = Modifier.fillMaxWidth()
                 )
-                Spacer(Modifier.height(4.dp))
-                candidates.forEach { (qr, dist) ->
-                    OutlinedButton(
-                        onClick  = { onLink(qr) },
-                        modifier = Modifier.fillMaxWidth(),
-                        shape    = RoundedCornerShape(8.dp),
-                        colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
-                        border   = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f))
+
+                // ── Results list ─────────────────────────────────────────────
+                if (filtered.isEmpty()) {
+                    Text(
+                        "No rooms match "$query"",
+                        color    = Color.Gray,
+                        fontSize = 13.sp,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                } else {
+                    Column(
+                        modifier            = Modifier
+                            .heightIn(max = 320.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 2.dp)
-                        ) {
-                            Text(qr.name, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                            Text(
-                                "${dist.toInt()} m away  ·  ${qr.building}  ·  Floor ${qr.floor}",
-                                color    = Color.Gray,
-                                fontSize = 11.sp
-                            )
+                        filtered.forEach { (qr, dist) ->
+                            OutlinedButton(
+                                onClick  = { onLink(qr) },
+                                modifier = Modifier.fillMaxWidth(),
+                                shape    = RoundedCornerShape(8.dp),
+                                colors   = ButtonDefaults.outlinedButtonColors(
+                                    contentColor = Color.White
+                                ),
+                                border   = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f))
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        qr.name,
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize   = 14.sp
+                                    )
+                                    Text(
+                                        buildString {
+                                            append("${dist.toInt()} m away")
+                                            if (qr.building.isNotBlank()) append("  ·  ${qr.building}")
+                                            if (qr.floor.isNotBlank())    append("  ·  Floor ${qr.floor}")
+                                        },
+                                        color    = Color.Gray,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
                         }
                     }
                 }

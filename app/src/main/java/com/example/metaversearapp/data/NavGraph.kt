@@ -140,6 +140,13 @@ object NavGraphPathfinder {
      * The heuristic uses 3-D straight-line distance so altitude differences
      * (e.g. navigating to a different floor via stairs) are properly estimated.
      *
+     * **Floor-jump guard**: any edge whose endpoints differ by more than
+     * [MAX_FLOOR_JUMP_ALT_M] metres in altitude is silently skipped unless at
+     * least one endpoint is a stair-type node ([NodeType.STAIR_TOP],
+     * [NodeType.STAIR_MIDDLE], or [NodeType.STAIR_BOTTOM]).  This prevents
+     * accidental cross-floor shortcuts caused by GPS/VPS altitude drift or
+     * manually mis-wired edges, while still allowing legitimate staircase paths.
+     *
      * @return Ordered list of [NavNode]s from start to goal, or empty if no path exists.
      */
     fun aStar(
@@ -154,8 +161,16 @@ object NavGraphPathfinder {
         val goal    = nodeMap[goalId] ?: return emptyList()
 
         // Build undirected adjacency list: nodeId -> [(neighborId, weight)]
+        // Cross-floor edges that don't pass through a stair node are dropped here
+        // so they can never be traversed, regardless of how they ended up in the DB.
         val adj = HashMap<String, MutableList<Pair<String, Double>>>(nodes.size * 2)
         for (e in edges) {
+            val a = nodeMap[e.fromId] ?: continue
+            val b = nodeMap[e.toId]   ?: continue
+            if (abs(a.alt - b.alt) > MAX_FLOOR_JUMP_ALT_M &&
+                a.type !in STAIR_TYPES && b.type !in STAIR_TYPES) {
+                continue   // floor-jump guard: skip this edge entirely
+            }
             adj.getOrPut(e.fromId) { mutableListOf() } += e.toId   to e.weight
             adj.getOrPut(e.toId)   { mutableListOf() } += e.fromId to e.weight
         }
@@ -189,6 +204,20 @@ object NavGraphPathfinder {
         }
         return emptyList()   // no path found
     }
+
+    /**
+     * Maximum altitude difference (metres) allowed on a single edge between two
+     * non-stair nodes.  Floors are typically 3–4 m apart; 2 m gives comfortable
+     * headroom for VPS altitude drift while still blocking genuine floor jumps.
+     */
+    const val MAX_FLOOR_JUMP_ALT_M = 2.0
+
+    /** Node types that are permitted to connect across floors. */
+    private val STAIR_TYPES = setOf(
+        NodeType.STAIR_TOP,
+        NodeType.STAIR_MIDDLE,
+        NodeType.STAIR_BOTTOM
+    )
 
     // ── Private helpers ───────────────────────────────────────────────────────
 

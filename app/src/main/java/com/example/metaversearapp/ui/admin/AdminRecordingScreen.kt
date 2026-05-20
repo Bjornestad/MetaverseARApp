@@ -243,10 +243,11 @@ internal fun AdminRecordingScreen(
             }
 
             if (type == NodeType.DOOR) {
+                // Load all known rooms so the admin can search and pick any of them,
+                // not just those within an arbitrary proximity radius.
                 val candidates = db.qrDao().getAll()
                     .map { qr -> qr to NavGraphPathfinder.haversine(node.lat, node.lon, qr.lat, qr.lon) }
-                    .filter { (_, dist) -> dist <= QR_LINK_RADIUS_M }
-                    .sortedBy { (_, dist) -> dist }
+                    .sortedBy { (_, dist) -> dist }   // nearest first as a convenience default
                 if (candidates.isNotEmpty()) {
                     pendingDoorNode    = updated
                     doorLinkCandidates = candidates
