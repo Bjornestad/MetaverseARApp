@@ -135,6 +135,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
 #map.mode-zone   { cursor: crosshair; }
 #map.mode-fill   { cursor: crosshair; }
 #map.mode-facing { cursor: crosshair; }
+#map.mode-edge   { cursor: crosshair; }
 
 /* ── Drop overlay ── */
 #drop-overlay {
@@ -282,6 +283,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
   <button class="mode-btn"        id="btn-box"    onclick="setMode('box')">   <span class="icon">⬚</span> Box&nbsp;Select</button>
   <button class="mode-btn"        id="btn-zone"   onclick="setMode('zone')">  <span class="icon">🏗</span> Allowed&nbsp;Zone</button>
   <button class="mode-btn"        id="btn-fill"   onclick="setMode('fill')">  <span class="icon">🪣</span> Fill&nbsp;Nodes</button>
+  <button class="mode-btn"        id="btn-edge"   onclick="setMode('edge')">  <span class="icon">🔗</span> Connect</button>
 
   <div class="sep"></div>
 
@@ -467,6 +469,9 @@ let facingPreviewGroup = null; // L.LayerGroup for the live arrow preview
 // Move-node state
 let moveNodeId = null; // node ID being repositioned via click-on-map
 
+// Connect-edge state
+let edgeFromId = null; // first node picked in 'edge' connect mode
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAP SETUP
 // ═══════════════════════════════════════════════════════════════════════════
@@ -576,7 +581,12 @@ function render() {
 
     layerGroup.addLayer(L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{
       color, weight: isStair?2.5:1.5, opacity, dashArray: dash
-    }).on('click', ev=>{ L.DomEvent.stopPropagation(ev); if (!aHidden && !bHidden) showEdgeInfo(e,a,b); }));
+    }).on('click', ev=>{
+      L.DomEvent.stopPropagation(ev);
+      if (aHidden || bHidden) return;
+      if (mode === 'edge') { deleteEdgePair(e.fromId, e.toId); }
+      else { showEdgeInfo(e, a, b); }
+    }));
   });
 
   // ── Nodes ────────────────────────────────────────────────────────────
@@ -588,15 +598,18 @@ function render() {
     const isSel    = selected.has(n.id);
     const isMain   = find(n.id) === main;
     const r        = n.type === 'DOOR' ? 7 : n.type?.startsWith('STAIR') ? 8 : 5;
+    const isEdgeFrom = n.id === edgeFromId;
 
     // Hidden nodes: render as faint purple ghosts (still visible, not clickable in view mode)
-    const fill    = isHidden ? '#a78bfa'
-                  : isSel    ? p.selected
+    const fill    = isHidden    ? '#a78bfa'
+                  : isEdgeFrom  ? '#f97316'
+                  : isSel       ? p.selected
                   : (p.type[n.type] ?? floorColor(n.floor));
-    const stroke  = isHidden ? '#a78bfa'
-                  : isSel    ? p.selected
-                  : isMain   ? p.nodeStroke : p.orphanStroke;
-    const sWeight = isSel ? 3 : isMain ? 1 : 2.5;
+    const stroke  = isHidden    ? '#a78bfa'
+                  : isEdgeFrom  ? '#fff'
+                  : isSel       ? p.selected
+                  : isMain      ? p.nodeStroke : p.orphanStroke;
+    const sWeight = isEdgeFrom ? 3 : isSel ? 3 : isMain ? 1 : 2.5;
 
     const circle = L.circleMarker([n.lat,n.lon],{
       radius: r, fillColor: fill, color: stroke, weight: sWeight,
@@ -607,7 +620,9 @@ function render() {
     circle.on('click', ev => {
       if (moveNodeId) return; // let map.on('click') handle node placement
       L.DomEvent.stopPropagation(ev);
-      if (mode === 'select') {
+      if (mode === 'edge' && !isHidden) {
+        handleEdgeClick(n.id);
+      } else if (mode === 'select') {
         toggleSelect(n.id);
       } else if (mode === 'view' && !isHidden) {
         showNodeInfo(n, find(n.id), size[find(n.id)], isMain);
@@ -631,7 +646,8 @@ function render() {
       halo.on('click', ev => {
         if (moveNodeId) return; // let map.on('click') handle node placement
         L.DomEvent.stopPropagation(ev);
-        if (mode === 'select') toggleSelect(n.id);
+        if (mode === 'edge' && !isHidden) handleEdgeClick(n.id);
+        else if (mode === 'select') toggleSelect(n.id);
         else if (mode === 'view') showNodeInfo(n, find(n.id), size[find(n.id)], isMain);
       });
       layerGroup.addLayer(halo);
@@ -860,12 +876,13 @@ const MODE_HINTS = {
   box:    'Drag a rectangle to select nodes inside it',
   zone:   'Drag rectangles to mark allowed building areas • then Trim to Zones',
   fill:   'Click to place polygon vertices • Double-click to close polygon and configure fill',
+  edge:   'Click a node to start an edge, then click another node to connect them • click edge to delete • Esc to cancel',
 };
-const MODE_LABELS = { view:'View', select:'Select', box:'Box Select', zone:'Allowed Zone', fill:'Fill Nodes' };
+const MODE_LABELS = { view:'View', select:'Select', box:'Box Select', zone:'Allowed Zone', fill:'Fill Nodes', edge:'Connect' };
 
 function setMode(m) {
   mode = m;
-  ['view','select','box','zone','fill'].forEach(id => {
+  ['view','select','box','zone','fill','edge'].forEach(id => {
     document.getElementById('btn-'+id).classList.toggle('active', id === m);
   });
   const mapEl = document.getElementById('map');
@@ -886,6 +903,7 @@ function setMode(m) {
   }
   if (facingEditNodeId) cancelFacingEdit();
   if (moveNodeId)      cancelNodeMove();
+  if (m !== 'edge') cancelEdgeConnect();
   if (m !== 'select') { selected.clear(); updateSelUI(); render(); }
   if (m !== 'fill') { hideFillPanel(); clearFillPoly(); }
 }
@@ -1371,6 +1389,18 @@ function showEdgeInfo(e, a, b) {
     ['From type',  a.type || 'WAYPOINT'],
     ['To type',    b.type || 'WAYPOINT'],
   ]);
+  // Delete button
+  const panel = document.getElementById('info-panel');
+  panel.querySelectorAll('.info-action-btns').forEach(el => el.remove());
+  const btns = document.createElement('div');
+  btns.className = 'info-action-btns';
+  btns.innerHTML =
+    `<button class="info-action-btn"
+        style="border:1px solid #f87171;color:#f87171;"
+        onmouseover="this.style.background='#f8717120'"
+        onmouseout="this.style.background='transparent'"
+        onclick="deleteEdgePair('${e.fromId}','${e.toId}')">🗑 Delete edge</button>`;
+  panel.appendChild(btns);
 }
 function showPanel(title, rows) {
   document.getElementById('info-title').textContent  = title;
@@ -1472,6 +1502,89 @@ map.on('click', e => {
 // ═══════════════════════════════════════════════════════════════════════════
 // NODE EDIT (inline form)
 // ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EDGE CONNECT / DELETE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Called when a node is clicked in 'edge' mode.
+ * First click → set that node as the "from" end (highlighted orange).
+ * Second click on a different node → create bidirectional edge.
+ * Second click on the same node → deselect it.
+ */
+function handleEdgeClick(nodeId) {
+  if (!edgeFromId) {
+    // Pick the first node
+    edgeFromId = nodeId;
+    render();
+    const n = graphData.nodes.find(x => x.id === nodeId);
+    setStatus(`🔗 From: …${nodeId.slice(-6)}${n ? ' ('+n.type+' floor '+n.floor+')' : ''} — now click another node to connect · Esc to cancel`);
+    return;
+  }
+
+  if (edgeFromId === nodeId) {
+    // Clicked the same node — deselect
+    edgeFromId = null;
+    render();
+    setStatus(MODE_HINTS.edge);
+    return;
+  }
+
+  // Create the bidirectional edge pair
+  const fromId = edgeFromId;
+  const toId   = nodeId;
+  edgeFromId   = null;
+
+  const fromNode = graphData.nodes.find(x => x.id === fromId);
+  const toNode   = graphData.nodes.find(x => x.id === toId);
+  if (!fromNode || !toNode) { render(); return; }
+
+  // Check if the edge already exists in either direction
+  const alreadyExists =
+    graphData.edges.some(e => e.fromId === fromId && e.toId === toId) ||
+    graphData.edges.some(e => e.fromId === toId   && e.toId === fromId);
+
+  if (alreadyExists) {
+    render();
+    setStatus(`⚠ Edge already exists between these two nodes`);
+    return;
+  }
+
+  pushUndo();
+  const w = haversineM(fromNode.lat, fromNode.lon, toNode.lat, toNode.lon);
+  graphData.edges.push({ fromId, toId,   weight: w });
+  graphData.edges.push({ fromId: toId, toId: fromId, weight: w });
+
+  render();
+  updateStats();
+  setStatus(`✅ Edge created (${w.toFixed(1)} m) · click another node to continue · Esc to finish`);
+}
+
+/** Cancel any pending first-node selection in edge connect mode. */
+function cancelEdgeConnect() {
+  if (!edgeFromId) return;
+  edgeFromId = null;
+  render();
+}
+
+/**
+ * Delete both directions of an edge between fromId and toId.
+ * Called from the edge info Delete button and from edge-mode clicks on polylines.
+ */
+function deleteEdgePair(fromId, toId) {
+  pushUndo();
+  const before = graphData.edges.length;
+  graphData.edges = graphData.edges.filter(
+    e => !((e.fromId === fromId && e.toId === toId) ||
+           (e.fromId === toId   && e.toId === fromId))
+  );
+  const removed = before - graphData.edges.length;
+  document.getElementById('info-panel').style.display = 'none';
+  render();
+  updateStats();
+  setStatus(`🗑 Deleted ${removed} edge direction${removed !== 1 ? 's' : ''} · export to save`);
+}
 
 /**
  * Delete all edges connected to `nodeId`, then re-create bidirectional edges
@@ -1680,7 +1793,10 @@ document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size) deleteSelected();
   if (e.key === 'h' || e.key === 'H') { if (selected.size) hideSelected(); else unhideAll(); }
-  if (e.key === 'Escape') { cancelFacingEdit(); cancelNodeMove(); deselect(); setMode('view'); }
+  if (e.key === 'Escape') {
+    if (edgeFromId) { cancelEdgeConnect(); setStatus(MODE_HINTS.edge); }
+    else { cancelFacingEdit(); cancelNodeMove(); deselect(); setMode('view'); }
+  }
   if (e.key === 'z' && (e.ctrlKey||e.metaKey)) undo();
   if (e.key === '1') setMode('view');
   if (e.key === '2') setMode('select');
