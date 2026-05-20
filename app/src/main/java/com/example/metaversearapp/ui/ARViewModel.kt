@@ -664,8 +664,12 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             calculateBearing(pose.latitude, pose.longitude, next.lat + latOffset, next.lon + lonOffset)
         } else null
 
-        // Nearest nav node → floor label (only when we have nodes and a corrected position)
-        if (navNodes.isNotEmpty() && isCalibrated) {
+        // Nearest nav node → floor label.
+        // Uses corrected position when calibrated, raw VPS position otherwise.
+        // VPS horizontal accuracy (1–5 m) is sufficient to identify a floor since
+        // storeys are typically 3–4 m apart, so no calibration is needed for a
+        // reasonable estimate.
+        if (navNodes.isNotEmpty()) {
             currentFloor = NavGraphPathfinder.nearestNode(navNodes, corrLat, corrLon)?.floor
         }
     }

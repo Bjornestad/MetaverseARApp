@@ -308,7 +308,7 @@ fun GeospatialBottomOverlay(viewModel: ARViewModel, modifier: Modifier = Modifie
                 )
             }
 
-            // Floor indicator — always shown when nav nodes are loaded
+            // Floor indicator — shown whenever nav nodes are loaded
             val floor = viewModel.currentFloor
             if (floor != null || viewModel.navNodes.isNotEmpty()) {
                 HorizontalDivider(
@@ -325,14 +325,23 @@ fun GeospatialBottomOverlay(viewModel: ARViewModel, modifier: Modifier = Modifie
                         style = MaterialTheme.typography.labelSmall,
                         color = Color.White.copy(alpha = 0.6f)
                     )
-                    Text(
-                        if (floor != null) "F$floor"
-                        else if (!viewModel.isCalibrated) "— (not calibrated)"
-                        else "—",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (floor != null) Color(0xFF64FFDA)
-                                else Color.White.copy(alpha = 0.4f)
-                    )
+                    if (floor != null) {
+                        // ~F2 = estimated (uncalibrated VPS), F2 = confirmed (calibrated)
+                        val label    = if (viewModel.isCalibrated) "F$floor" else "~F$floor"
+                        val color    = if (viewModel.isCalibrated) Color(0xFF64FFDA)
+                                       else Color(0xFF64FFDA).copy(alpha = 0.55f)
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = color
+                        )
+                    } else {
+                        Text(
+                            "—",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.White.copy(alpha = 0.4f)
+                        )
+                    }
                 }
             }
         }
