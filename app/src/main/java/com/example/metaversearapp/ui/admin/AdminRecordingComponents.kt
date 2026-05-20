@@ -41,15 +41,10 @@ internal fun RecordingTopHud(
     statusMsg:          String,
     geospatialPose:     GeospatialPose?,
     earthTrackingState: TrackingState,
-    isCalibrated:       Boolean,
-    latOffset:          Double,
-    lonOffset:          Double,
-    altOffset:          Double,
 ) {
     val vpsColor = when {
-        earthTrackingState == TrackingState.TRACKING && isCalibrated -> Color(0xFF4CAF50)
-        earthTrackingState == TrackingState.TRACKING                  -> Color(0xFFFFCC80)
-        else                                                          -> Color(0xFFFF5252)
+        earthTrackingState == TrackingState.TRACKING -> Color(0xFF4CAF50)
+        else                                          -> Color(0xFFFF5252)
     }
 
     Card(
@@ -96,11 +91,8 @@ internal fun RecordingTopHud(
                 Surface(shape = CircleShape, color = vpsColor, modifier = Modifier.size(8.dp)) {}
             }
 
-            // ── GPS readout (only when tracking and calibrated) ──────────────
-            if (geospatialPose != null &&
-                earthTrackingState == TrackingState.TRACKING &&
-                isCalibrated
-            ) {
+            // ── GPS readout (when tracking) ──────────────────────────────────
+            if (geospatialPose != null && earthTrackingState == TrackingState.TRACKING) {
                 HorizontalDivider(
                     thickness = 1.dp,
                     color     = Color.White.copy(alpha = 0.08f)
@@ -112,11 +104,11 @@ internal fun RecordingTopHud(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        String.format(Locale.US, "Lat %.6f", geospatialPose.latitude  - latOffset),
+                        String.format(Locale.US, "Lat %.6f", geospatialPose.latitude),
                         color = gpsColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
                     )
                     Text(
-                        String.format(Locale.US, "Lon %.6f", geospatialPose.longitude - lonOffset),
+                        String.format(Locale.US, "Lon %.6f", geospatialPose.longitude),
                         color = gpsColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
                     )
                 }
@@ -126,7 +118,7 @@ internal fun RecordingTopHud(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        String.format(Locale.US, "Alt %.1fm", geospatialPose.altitude - altOffset),
+                        String.format(Locale.US, "Alt %.1fm", geospatialPose.altitude),
                         color = gpsColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
                     )
                     Text(
@@ -152,8 +144,8 @@ internal fun RecordingControlsPanel(
     lastRecordedNode:  NavNode?,
     lastNodeType:      NodeType,
     onMarkAs:          (NodeType) -> Unit,
-    isScanning:        Boolean,
-    onScanToggle:      () -> Unit,
+    isDoorScanActive:  Boolean    = false,
+    onCancelDoorScan:  () -> Unit = {},
     isRecording:       Boolean,
     onRecordToggle:    () -> Unit,
     onFinished:        () -> Unit,
@@ -168,8 +160,8 @@ internal fun RecordingControlsPanel(
         FloorSelectorCard(currentFloor, onFloorChange)
         MarkWaypointCard(lastRecordedNode, lastNodeType, onMarkAs)
         RecordingActionBar(
-            isScanning        = isScanning,
-            onScanToggle      = onScanToggle,
+            isDoorScanActive  = isDoorScanActive,
+            onCancelDoorScan  = onCancelDoorScan,
             isRecording       = isRecording,
             onRecordToggle    = onRecordToggle,
             cloudHostState    = cloudHostState,
@@ -288,13 +280,13 @@ private fun NodeIconButton(
 }
 
 /**
- * Single-row icon button bar: QR scan | record toggle | host anchor | finish.
- * Replaces four separate full-width buttons to reclaim vertical screen space.
+ * Single-row icon button bar: record toggle | host anchor | finish.
+ * When a door QR scan is active a cancel button appears on the left.
  */
 @Composable
 private fun RecordingActionBar(
-    isScanning:        Boolean,
-    onScanToggle:      () -> Unit,
+    isDoorScanActive:  Boolean,
+    onCancelDoorScan:  () -> Unit,
     isRecording:       Boolean,
     onRecordToggle:    () -> Unit,
     cloudHostState:    HostState,
@@ -314,17 +306,15 @@ private fun RecordingActionBar(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment     = Alignment.CenterVertically
         ) {
-            // ── QR scan ──────────────────────────────────────────────────────
-            val scanColor = if (isScanning) Color(0xFFFF6B35) else Color(0xFF1E88E5)
-            OutlinedIconButton(
-                onClick = onScanToggle,
-                colors  = IconButtonDefaults.outlinedIconButtonColors(contentColor = scanColor),
-                border  = BorderStroke(1.dp, scanColor.copy(alpha = 0.7f))
-            ) {
-                Icon(
-                    if (isScanning) Icons.Default.Close else Icons.Default.QrCodeScanner,
-                    contentDescription = if (isScanning) "Cancel scan" else "Scan QR"
-                )
+            // ── Cancel door QR scan (visible only while scanning) ────────────
+            if (isDoorScanActive) {
+                OutlinedIconButton(
+                    onClick = onCancelDoorScan,
+                    colors  = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFFFF6B35)),
+                    border  = BorderStroke(1.dp, Color(0xFFFF6B35).copy(alpha = 0.7f))
+                ) {
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = "Cancel QR scan")
+                }
             }
 
             // ── Record toggle ────────────────────────────────────────────────
@@ -538,6 +528,58 @@ internal fun DoorManagementDialog(
         dismissButton  = {
             TextButton(onClick = onDismiss) {
                 Text("Close", color = Color.Gray)
+            }
+        }
+    )
+}
+
+// ── Door QR prompt ─────────────────────────────────────────────────────────────
+
+/**
+ * Shown immediately after marking a node as DOOR.
+ * Admin can choose to scan the QR code posted at this door, or skip to leave
+ * the door GPS-only (cloud anchors handle precision calibration instead).
+ */
+@Composable
+internal fun DoorQrPromptDialog(
+    onScanQr: () -> Unit,
+    onSkip:   () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onSkip,
+        containerColor   = Color(0xFF1E1E1E),
+        title = {
+            Text(
+                "Link QR code to this door?",
+                color      = Color(0xFF64FFDA),
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Text(
+                "Point the camera at the QR code on this door to link it, or skip to keep it GPS-only.",
+                color    = Color.White.copy(alpha = 0.8f),
+                fontSize = 14.sp
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = onScanQr,
+                colors  = ButtonDefaults.buttonColors(containerColor = Color(0xFF64FFDA))
+            ) {
+                Icon(
+                    Icons.Default.QrCodeScanner,
+                    contentDescription = null,
+                    tint     = Color.Black,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Text("Scan QR", color = Color.Black, fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onSkip) {
+                Text("Skip — GPS only", color = Color.Gray)
             }
         }
     )

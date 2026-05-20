@@ -94,19 +94,13 @@ internal fun AdminRecordingScreen(
     var geospatialPose     by remember { mutableStateOf<GeospatialPose?>(null) }
     var earthTrackingState by remember { mutableStateOf(TrackingState.STOPPED) }
 
-    // ── Calibration offsets (set by QR scan) ───────────────────────────────────
-    var latOffset    by remember { mutableStateOf(0.0) }
-    var lonOffset    by remember { mutableStateOf(0.0) }
-    var altOffset    by remember { mutableStateOf(0.0) }
-    var isCalibrated by remember { mutableStateOf(true) }
-
     // ── Recording state ────────────────────────────────────────────────────────
     var isRecording      by remember { mutableStateOf(false) }
     var sessionNodes     by remember { mutableIntStateOf(0) }
     var sessionEdges     by remember { mutableIntStateOf(0) }
     var lastRecordedNode by remember { mutableStateOf<NavNode?>(null) }
     var lastCaptureTime  by remember { mutableLongStateOf(0L) }
-    var statusMsg        by remember { mutableStateOf("Tap ▶ to record  ·  scan QR to calibrate") }
+    var statusMsg        by remember { mutableStateOf("Tap ▶ to record") }
     var lastNodeType     by remember { mutableStateOf(NodeType.WAYPOINT) }
 
     // Auto-bridging: snapshot of existing nodes taken at recording-segment start.
@@ -124,9 +118,8 @@ internal fun AdminRecordingScreen(
     var cloudAnchorVisuals by remember { mutableStateOf<List<Anchor>>(emptyList()) }
 
     // ── Hardware compass heading (rotation-vector sensor, GPS-independent) ────────
-    // Continuously updated so linkDoorToQr() can snapshot the current facing
-    // direction without any GPS involvement.  This avoids the 180° flip that
-    // occurs when GPS positions are used to derive a bearing at short distances.
+    // Continuously updated so the door QR scan can snapshot the compass heading
+    // the moment a QR is detected, storing the direction users face at that door.
     var sensorHeading by remember { mutableStateOf<Double?>(null) }
     DisposableEffect(Unit) {
         val sm = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
@@ -146,14 +139,13 @@ internal fun AdminRecordingScreen(
         onDispose { sm.unregisterListener(listener) }
     }
 
-    // ── Door → QR link picker state ────────────────────────────────────────────
-    var showDoorLinkDialog by remember { mutableStateOf(false) }
-    var doorLinkCandidates by remember { mutableStateOf<List<Pair<QrLocation, Double>>>(emptyList()) }
-    var pendingDoorNode    by remember { mutableStateOf<NavNode?>(null) }
-
-    // ── QR scanning ────────────────────────────────────────────────────────────
-    var isScanning   by remember { mutableStateOf(false) }
-    var lastScanTime by remember { mutableLongStateOf(0L) }
+    // ── Door QR scan state ─────────────────────────────────────────────────────
+    // showDoorQrPrompt: "Scan QR / Skip?" dialog shown after marking a door node.
+    // isDoorScanActive: camera is actively looking for the door's QR code.
+    var showDoorQrPrompt by remember { mutableStateOf(false) }
+    var isDoorScanActive by remember { mutableStateOf(false) }
+    var pendingDoorNode  by remember { mutableStateOf<NavNode?>(null) }
+    var lastScanTime     by remember { mutableLongStateOf(0L) }
 
     val scanner = remember {
         val opts = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
@@ -243,19 +235,9 @@ internal fun AdminRecordingScreen(
             }
 
             if (type == NodeType.DOOR) {
-                // Load all known rooms so the admin can search and pick any of them,
-                // not just those within an arbitrary proximity radius.
-                val candidates = db.qrDao().getAll()
-                    .map { qr -> qr to NavGraphPathfinder.haversine(node.lat, node.lon, qr.lat, qr.lon) }
-                    .sortedBy { (_, dist) -> dist }   // nearest first as a convenience default
-                if (candidates.isNotEmpty()) {
-                    pendingDoorNode    = updated
-                    doorLinkCandidates = candidates
-                    showDoorLinkDialog = true
-                    statusMsg = "Choose which room this door belongs to…"
-                } else {
-                    statusMsg = "Marked as Door — no rooms in database yet (upload QR data first)"
-                }
+                pendingDoorNode  = updated
+                showDoorQrPrompt = true
+                statusMsg        = "Door marked — link a QR code or skip"
             }
         }
     }
@@ -264,49 +246,26 @@ internal fun AdminRecordingScreen(
      * Recomputes the weight of every edge that touches [node], using the node's
      * current (possibly just-snapped) coordinates and the neighbour's stored coords.
      * Must be called after any operation that moves a node's lat/lon/alt in the DB.
+     *
+     * Uses haversine (horizontal only) for same-floor edges and distance3d only
+     * for cross-floor stair edges (alt diff > 2 m).  GPS altitude indoors is
+     * typically ±5–10 m noisy; including it in same-floor weights inflates them
+     * by up to 10× and causes A* to route around valid corridors.
      */
     suspend fun reweightEdgesForNode(node: NavNode) {
         val edges = db.navDao().getEdgesForNode(node.id)
         for (edge in edges) {
             val neighbourId = if (edge.fromId == node.id) edge.toId else edge.fromId
             val neighbour   = db.navDao().getNodeById(neighbourId) ?: continue
-            val newWeight   = NavGraphPathfinder.distance3d(
-                node.lat, node.lon, node.alt,
-                neighbour.lat, neighbour.lon, neighbour.alt
-            )
+            val altDiff     = kotlin.math.abs(node.alt - neighbour.alt)
+            val newWeight   = if (altDiff > 2.0)
+                NavGraphPathfinder.distance3d(node.lat, node.lon, node.alt, neighbour.lat, neighbour.lon, neighbour.alt)
+            else
+                NavGraphPathfinder.haversine(node.lat, node.lon, neighbour.lat, neighbour.lon)
             db.navDao().insertEdge(edge.copy(weight = newWeight))
         }
     }
 
-    /** Links [pendingDoorNode] to [qr] (stores ID + label) without moving the node. */
-    fun linkDoorToQr(qr: QrLocation) {
-        val node = pendingDoorNode ?: return
-        // Snapshot the hardware compass heading now — admin is standing in front
-        // of the QR code so this IS the direction users will face when scanning.
-        // Stored so onQrScanned() can use it as ground truth instead of GPS bearing.
-        val capturedFacingDeg = sensorHeading
-        scope.launch {
-            // Keep lat/lon/alt from the recorded walk-through position.
-            // QR codes sit on walls, so snapping to qr.lat/lon would pull the
-            // door node off-centre and inflate apparent corridor width.
-            val linked = node.copy(
-                anchorQrId = qr.qrID,
-                label      = qr.name
-            )
-            db.navDao().updateNode(linked)
-            reweightEdgesForNode(linked)
-            lastRecordedNode = linked
-            if (capturedFacingDeg != null) {
-                db.qrDao().updateFacingDeg(qr.qrID, capturedFacingDeg)
-                statusMsg = "Door linked to '${qr.name}'  ·  facing %.1f°".format(capturedFacingDeg)
-            } else {
-                statusMsg = "Door linked to '${qr.name}'"
-            }
-        }
-        showDoorLinkDialog = false
-        pendingDoorNode    = null
-        doorLinkCandidates = emptyList()
-    }
 
     /**
      * Creates a local ARCore anchor at the current camera position and hosts it
@@ -391,10 +350,10 @@ internal fun AdminRecordingScreen(
                             val now = System.currentTimeMillis()
 
                     // ── Auto-node capture ─────────────────────────────────────
-                    if (isRecording && isCalibrated && now - lastCaptureTime > CAPTURE_INTERVAL_MS) {
-                        val corrLat = pose.latitude  - latOffset
-                        val corrLon = pose.longitude - lonOffset
-                        val corrAlt = pose.altitude  - altOffset
+                    if (isRecording && now - lastCaptureTime > CAPTURE_INTERVAL_MS) {
+                        val corrLat = pose.latitude
+                        val corrLon = pose.longitude
+                        val corrAlt = pose.altitude
 
                         // Distance from the last node placed in this session.
                         val distFromLast = lastRecordedNode?.let {
@@ -424,9 +383,9 @@ internal fun AdminRecordingScreen(
                                 lastCaptureTime  = now
                                 if (prevNode != null) {
                                     scope.launch {
-                                        val d = NavGraphPathfinder.distance3d(
-                                            prevNode.lat, prevNode.lon, prevNode.alt,
-                                            nearExisting.lat, nearExisting.lon, nearExisting.alt
+                                        val d = NavGraphPathfinder.haversine(
+                                            prevNode.lat, prevNode.lon,
+                                            nearExisting.lat, nearExisting.lon
                                         )
                                         db.navDao().insertEdge(NavEdge(prevNode.id, nearExisting.id, d))
                                         db.navDao().insertEdge(NavEdge(nearExisting.id, prevNode.id, d))
@@ -455,9 +414,9 @@ internal fun AdminRecordingScreen(
                                             NavEdge(
                                                 fromId = prevNode.id,
                                                 toId   = newNode.id,
-                                                weight = NavGraphPathfinder.distance3d(
-                                                    prevNode.lat, prevNode.lon, prevNode.alt,
-                                                    newNode.lat,  newNode.lon,  newNode.alt
+                                                weight = NavGraphPathfinder.haversine(
+                                                    prevNode.lat, prevNode.lon,
+                                                    newNode.lat,  newNode.lon
                                                 )
                                             )
                                         )
@@ -476,9 +435,9 @@ internal fun AdminRecordingScreen(
                                         ) <= SEGMENT_SNAP_RADIUS_M
                                     }
                                     for (nearby in bridges) {
-                                        val d = NavGraphPathfinder.distance3d(
-                                            newNode.lat, newNode.lon, newNode.alt,
-                                            nearby.lat,  nearby.lon,  nearby.alt
+                                        val d = NavGraphPathfinder.haversine(
+                                            newNode.lat, newNode.lon,
+                                            nearby.lat,  nearby.lon
                                         )
                                         db.navDao().insertEdge(NavEdge(newNode.id, nearby.id, d))
                                         db.navDao().insertEdge(NavEdge(nearby.id, newNode.id, d))
@@ -492,8 +451,8 @@ internal fun AdminRecordingScreen(
                         }
                     }
 
-                    // ── QR calibration scan ───────────────────────────────────
-                    if (isScanning && now - lastScanTime > 1_000L) {
+                    // ── Door QR scan (active only after admin taps "Scan QR") ────
+                    if (isDoorScanActive && now - lastScanTime > 1_000L) {
                         try {
                             if (currentLifecycleState == Lifecycle.State.RESUMED) {
                                 val image    = frame.acquireCameraImage()
@@ -519,33 +478,36 @@ internal fun AdminRecordingScreen(
                                     .addOnSuccessListener { barcodes ->
                                         if (barcodes.isNotEmpty()) {
                                             val qrId = barcodes[0].rawValue ?: return@addOnSuccessListener
+                                            val node = pendingDoorNode ?: return@addOnSuccessListener
+                                            val capturedHeading = sensorHeading
                                             scope.launch {
                                                 val loc = db.qrDao().getById(qrId)
-                                                if (loc != null) {
-                                                    latOffset    = pose.latitude  - loc.lat
-                                                    lonOffset    = pose.longitude - loc.lon
-                                                    if (loc.alt != 0.0) altOffset = pose.altitude - loc.alt
-                                                    isCalibrated = true
-                                                    isScanning   = false
-                                                    lastRecordedNode?.let { node ->
-                                                        val anchored = node.copy(
-                                                            anchorQrId = qrId,
-                                                            label      = loc.name,
-                                                            lat        = loc.lat,
-                                                            lon        = loc.lon,
-                                                            alt        = if (loc.alt != 0.0) loc.alt else node.alt
-                                                        )
-                                                        db.navDao().updateNode(anchored)
-                                                        reweightEdgesForNode(anchored)
-                                                        lastRecordedNode = anchored
-                                                    }
-                                                    statusMsg = if (isRecording)
-                                                        "Recalibrated at ${loc.name} — keep walking"
-                                                    else
-                                                        "Calibrated at ${loc.name} — ready to record"
+                                                val linked = if (loc != null) {
+                                                    // Snap to QR's surveyed position so cross-session
+                                                    // door nodes all converge on the same coordinates.
+                                                    node.copy(
+                                                        anchorQrId = qrId,
+                                                        label      = loc.name,
+                                                        lat        = loc.lat,
+                                                        lon        = loc.lon,
+                                                        alt        = if (loc.alt != 0.0) loc.alt else node.alt
+                                                    )
                                                 } else {
-                                                    statusMsg = "QR not in database: $qrId"
+                                                    // QR not in room database — store ID only
+                                                    node.copy(anchorQrId = qrId)
                                                 }
+                                                db.navDao().updateNode(linked)
+                                                reweightEdgesForNode(linked)
+                                                lastRecordedNode = linked
+                                                if (capturedHeading != null && loc != null) {
+                                                    db.qrDao().updateFacingDeg(qrId, capturedHeading)
+                                                }
+                                                statusMsg = if (loc != null)
+                                                    "Door linked to '${loc.name}'"
+                                                else
+                                                    "QR stored — room not yet in database"
+                                                isDoorScanActive = false
+                                                pendingDoorNode  = null
                                             }
                                         }
                                     }
@@ -603,12 +565,10 @@ internal fun AdminRecordingScreen(
 
         // ── BOTTOM-LEFT: tiled minimap ────────────────────────────────────────
         geospatialPose?.let { pose ->
-            val corrLat = pose.latitude  - latOffset
-            val corrLon = pose.longitude - lonOffset
-            val heading = (pose.heading  + 360.0) % 360.0
+            val heading = (pose.heading + 360.0) % 360.0
             TiledMiniMap(
-                lat      = corrLat,
-                lon      = corrLon,
+                lat      = pose.latitude,
+                lon      = pose.longitude,
                 heading  = heading,
                 nodes    = preloadedNodes,
                 edges    = preloadedEdges,
@@ -630,10 +590,6 @@ internal fun AdminRecordingScreen(
                 statusMsg          = statusMsg,
                 geospatialPose     = geospatialPose,
                 earthTrackingState = earthTrackingState,
-                isCalibrated       = isCalibrated,
-                latOffset          = latOffset,
-                lonOffset          = lonOffset,
-                altOffset          = altOffset,
             )
             RecordingControlsPanel(
                 currentFloor       = currentFloor,
@@ -641,10 +597,11 @@ internal fun AdminRecordingScreen(
                 lastRecordedNode   = lastRecordedNode,
                 lastNodeType       = lastNodeType,
                 onMarkAs           = ::markLastNodeAs,
-                isScanning         = isScanning,
-                onScanToggle       = {
-                    isScanning = !isScanning
-                    if (isScanning) statusMsg = "Point camera at a QR code..."
+                isDoorScanActive   = isDoorScanActive,
+                onCancelDoorScan   = {
+                    isDoorScanActive = false
+                    pendingDoorNode  = null
+                    statusMsg        = "Door QR scan cancelled"
                 },
                 isRecording        = isRecording,
                 onRecordToggle     = {
@@ -673,16 +630,18 @@ internal fun AdminRecordingScreen(
         }
     }
 
-    // Door → QR link picker dialog
-    if (showDoorLinkDialog && doorLinkCandidates.isNotEmpty()) {
-        DoorLinkPickerDialog(
-            candidates = doorLinkCandidates,
-            onLink     = ::linkDoorToQr,
-            onDismiss  = {
-                showDoorLinkDialog = false
-                pendingDoorNode    = null
-                doorLinkCandidates = emptyList()
-                statusMsg = "Marked as Door (no room linked)"
+    // Scan-QR-or-skip prompt shown after marking a node as DOOR
+    if (showDoorQrPrompt) {
+        DoorQrPromptDialog(
+            onScanQr = {
+                showDoorQrPrompt = false
+                isDoorScanActive = true
+                statusMsg        = "Point camera at the door's QR code…"
+            },
+            onSkip = {
+                showDoorQrPrompt = false
+                pendingDoorNode  = null
+                statusMsg        = "Door marked — GPS only"
             }
         )
     }

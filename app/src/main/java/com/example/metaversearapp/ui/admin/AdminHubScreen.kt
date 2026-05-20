@@ -285,7 +285,7 @@ internal fun AdminHubScreen(
                     Spacer(modifier = Modifier.height(8.dp))
                     InstructionStep("1", "Tap 'Start Recording Walk'")
                     InstructionStep("2", "Walk corridors at normal speed")
-                    InstructionStep("3", "Optionally scan QRs you pass — they anchor and recalibrate the path")
+                    InstructionStep("3", "Mark nodes as Door, Stair Top/Bottom where relevant — scan QR on doors if present")
                     InstructionStep("4", "Change floor label when using stairs/elevator")
                     InstructionStep("5", "Tap 'Finish Session' when done")
                     InstructionStep("6", "Tap 'Upload Graph to Gist' — all users get the update on next app launch")
