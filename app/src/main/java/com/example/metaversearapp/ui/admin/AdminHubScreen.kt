@@ -18,9 +18,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.AppDatabase
+import com.example.metaversearapp.data.FloorAltitude
 import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphExport
-import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
@@ -71,6 +71,11 @@ internal fun AdminHubScreen(
                     // locally recorded nodes (not yet in Gist) are untouched.
                     export.nodes.forEach { db.navDao().insertNode(it) }
                     export.edges.forEach { db.navDao().insertEdge(it) }
+                    // Floor altitudes from the Gist are the canonical values — upsert so all
+                    // devices share the same reference altitude for each floor.
+                    export.floorAltitudes.forEach { (floor, alt) ->
+                        db.floorAltDao().upsert(FloorAltitude(floor, alt))
+                    }
                 }
             }
             adminGistSyncDone = true
@@ -79,6 +84,21 @@ internal fun AdminHubScreen(
                 onFailure = { "Could not sync from Gist — using local data" }
             )
         }
+        // One-time bootstrap: if the floor altitude table is still empty after the Gist sync
+        // (old Gist without floor altitudes, or first launch after adding this feature),
+        // populate it from the median of existing nodes per floor so the table is immediately
+        // useful without requiring a fresh recording session on every floor.
+        withContext(Dispatchers.IO) {
+            if (db.floorAltDao().getAll().isEmpty()) {
+                db.navDao().getAllNodes()
+                    .groupBy { it.floor }
+                    .forEach { (floor, nodes) ->
+                        val sorted = nodes.map { it.alt }.sorted()
+                        db.floorAltDao().upsert(FloorAltitude(floor, sorted[sorted.size / 2]))
+                    }
+            }
+        }
+
         // Refresh counts from DB (covers both first entry and post-recording re-entry)
         nodeCount      = db.navDao().nodeCount()
         edgeCount      = db.navDao().edgeCount()
@@ -170,9 +190,11 @@ internal fun AdminHubScreen(
                     scope.launch {
                         isUploading  = true
                         uploadStatus = "Uploading…"
-                        val nodes  = db.navDao().getAllNodes()
-                        val edges  = db.navDao().getAllEdges()
-                        val result = NavGistSync.upload(nodes, edges)
+                        val nodes        = db.navDao().getAllNodes()
+                        val edges        = db.navDao().getAllEdges()
+                        val floorAlts    = db.floorAltDao().getAll()
+                            .associate { it.floor to it.alt }
+                        val result = NavGistSync.upload(nodes, edges, floorAlts)
                         isUploading  = false
                         uploadStatus = result.fold(
                             onSuccess = { "✓ Uploaded ${nodes.size} nodes, ${edges.size} edges to Gist" },
@@ -302,8 +324,8 @@ internal fun AdminHubScreen(
             onReLink  = { node ->
                 reLinkTarget     = node
                 reLinkCandidates = allQrLocations
-                    .map { qr -> qr to NavGraphPathfinder.haversine(node.lat, node.lon, qr.lat, qr.lon) }
-                    .sortedBy { (_, d) -> d }
+                    .sortedBy { it.name }
+                    .map { qr -> qr to 0.0 }
                 showDoorMgmtDlg  = false
                 showReLinkDlg    = true
             },
@@ -321,8 +343,9 @@ internal fun AdminHubScreen(
     if (showReLinkDlg) {
         val capturedTarget = reLinkTarget
         DoorLinkPickerDialog(
-            candidates = reLinkCandidates,
-            onLink     = { qr ->
+            candidates   = reLinkCandidates,
+            showDistance = false,
+            onLink       = { qr ->
                 showReLinkDlg    = false
                 reLinkTarget     = null
                 reLinkCandidates = emptyList()

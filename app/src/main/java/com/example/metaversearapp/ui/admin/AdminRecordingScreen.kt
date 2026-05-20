@@ -21,6 +21,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.metaversearapp.data.AppDatabase
+import com.example.metaversearapp.data.FloorAltitude
 import com.example.metaversearapp.data.NavEdge
 import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.ui.components.TiledMiniMap
@@ -159,19 +160,31 @@ internal fun AdminRecordingScreen(
         BarcodeScanning.getClient(opts)
     }
 
-    // Recompute canonical floor altitude whenever the admin switches floors during
-    // a recording session.  Uses the median of existing nodes so a single bad GPS
-    // reading doesn't skew the whole floor.  Only runs while recording (the floor
-    // selector is also available when paused, but we want the first GPS reading to
-    // anchor the floor on new territory, so we reset to null and let the capture
-    // loop set it from the first real reading).
+    // GPS accumulator for floors that have no established canonical altitude yet.
+    // Avoids anchoring the whole floor to a single potentially-noisy GPS reading.
+    // Stored as a plain remember reference (not state) — only read inside the AR callback.
+    val floorGpsAccumulator = remember { mutableMapOf<String, MutableList<Double>>() }
+
+    // When the floor changes during recording: load the table value first (preferred),
+    // fall back to node median, reset the GPS accumulator for this floor so samples
+    // don't carry over from a previous visit this session.
     LaunchedEffect(currentFloor) {
         if (!isRecording) return@LaunchedEffect
-        currentFloorAlt = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
-            .filter { it.floor == currentFloor }
-            .map { it.alt }
-            .takeIf { it.isNotEmpty() }
-            ?.sorted()?.let { it[it.size / 2] }
+        floorGpsAccumulator.remove(currentFloor)
+        val tableAlt = withContext(Dispatchers.IO) { db.floorAltDao().getAlt(currentFloor) }
+        currentFloorAlt = tableAlt ?: run {
+            val nodeMedian = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
+                .filter { it.floor == currentFloor }
+                .map { it.alt }
+                .takeIf { it.isNotEmpty() }
+                ?.sorted()?.let { it[it.size / 2] }
+            if (nodeMedian != null) {
+                withContext(Dispatchers.IO) {
+                    db.floorAltDao().upsert(FloorAltitude(currentFloor, nodeMedian))
+                }
+            }
+            nodeMedian
+        }
     }
 
     // ── DB actions ─────────────────────────────────────────────────────────────
@@ -294,9 +307,9 @@ internal fun AdminRecordingScreen(
 
 
     /**
-     * Links [pendingDoorNode] to [qr], snapping its position to the QR's known coordinates
-     * so that door nodes recorded in different sessions all converge on the same canonical
-     * position and edges get accurate weights.
+     * Links [pendingDoorNode] to [qr], recording the room name and QR ID.
+     * GPS position is intentionally kept as-recorded — the admin physically stood
+     * at the door, so that position is more reliable than map-derived QR coordinates.
      */
     fun linkDoorToQr(qr: QrLocation) {
         val node = pendingDoorNode ?: return
@@ -304,10 +317,7 @@ internal fun AdminRecordingScreen(
         scope.launch {
             val linked = node.copy(
                 anchorQrId = qr.qrID,
-                label      = qr.name,
-                lat        = qr.lat,
-                lon        = qr.lon,
-                alt        = if (qr.alt != 0.0) qr.alt else node.alt
+                label      = qr.name
             )
             db.navDao().updateNode(linked)
             reweightEdgesForNode(linked)
@@ -408,101 +418,122 @@ internal fun AdminRecordingScreen(
                     if (isRecording && now - lastCaptureTime > CAPTURE_INTERVAL_MS) {
                         val corrLat = pose.latitude
                         val corrLon = pose.longitude
-                        // Use the canonical floor altitude rather than raw GPS altitude.
-                        // If no nodes exist on this floor yet, anchor the first GPS reading
-                        // so all subsequent nodes on this floor share a consistent height.
-                        val corrAlt = currentFloorAlt ?: pose.altitude.also { currentFloorAlt = it }
 
-                        // Distance from the last node placed in this session.
-                        val distFromLast = lastRecordedNode?.let {
-                            NavGraphPathfinder.distance3d(corrLat, corrLon, corrAlt, it.lat, it.lon, it.alt)
-                        } ?: Double.MAX_VALUE
-
-                        // Nearest pre-existing node (from a previous session) within
-                        // the no-duplicate radius.  Altitude guard prevents matching
-                        // vertically stacked corridors on different floors.
-                        val nearExisting = preloadedNodes.firstOrNull { existing ->
-                            existing.id != lastRecordedNode?.id &&
-                            kotlin.math.abs(existing.alt - corrAlt) <= 1.5 &&
-                            NavGraphPathfinder.haversine(
-                                corrLat, corrLon, existing.lat, existing.lon
-                            ) < MIN_NODE_DISTANCE_M
+                        // Canonical floor altitude. If the table has a value, use it.
+                        // If not, accumulate GPS readings until we have 5 then lock in
+                        // their median — avoids anchoring the floor to a single noisy reading.
+                        val corrAlt: Double? = if (currentFloorAlt != null) {
+                            currentFloorAlt
+                        } else {
+                            val acc = floorGpsAccumulator.getOrPut(currentFloor) { mutableListOf() }
+                            acc.add(pose.altitude)
+                            lastCaptureTime = now
+                            if (acc.size >= 5) {
+                                val median = acc.sorted().let { it[it.size / 2] }
+                                currentFloorAlt = median
+                                scope.launch {
+                                    db.floorAltDao().upsert(FloorAltitude(currentFloor, median))
+                                }
+                                statusMsg = "Floor altitude locked — recording"
+                                median
+                            } else {
+                                statusMsg = "Settling GPS ${acc.size}/5…"
+                                null
+                            }
                         }
 
-                        if (distFromLast >= MIN_NODE_DISTANCE_M) {
-                            if (nearExisting != null) {
-                                // ── Merge: already covered by a previous session ─────
-                                // Don't create a duplicate node.  Adopt the existing
-                                // node as the current chain anchor so that when the
-                                // path later enters new territory the new node will
-                                // bridge back to the existing graph correctly.
-                                val prevNode = lastRecordedNode
-                                lastRecordedNode = nearExisting
-                                lastCaptureTime  = now
-                                if (prevNode != null) {
-                                    scope.launch {
-                                        val d = NavGraphPathfinder.haversine(
-                                            prevNode.lat, prevNode.lon,
-                                            nearExisting.lat, nearExisting.lon
-                                        )
-                                        db.navDao().insertEdge(NavEdge(prevNode.id, nearExisting.id, d))
-                                        db.navDao().insertEdge(NavEdge(nearExisting.id, prevNode.id, d))
-                                        sessionEdges += 2
-                                        statusMsg = "Following existing path…"
-                                    }
-                                }
-                            } else {
-                                // ── New node: this position has no existing coverage ──
-                                val newNode  = NavNode(
-                                    id    = UUID.randomUUID().toString(),
-                                    lat   = corrLat,
-                                    lon   = corrLon,
-                                    alt   = corrAlt,
-                                    floor = currentFloor
-                                )
-                                val prevNode     = lastRecordedNode
-                                lastRecordedNode = newNode
-                                lastCaptureTime  = now
+                        if (corrAlt != null) {
+                            // Distance from the last node placed in this session.
+                            val distFromLast = lastRecordedNode?.let {
+                                NavGraphPathfinder.distance3d(corrLat, corrLon, corrAlt, it.lat, it.lon, it.alt)
+                            } ?: Double.MAX_VALUE
 
-                                scope.launch {
-                                    db.navDao().insertNode(newNode)
-                                    sessionNodes++
+                            // Nearest pre-existing node (from a previous session) within
+                            // the no-duplicate radius.  Altitude guard prevents matching
+                            // vertically stacked corridors on different floors.
+                            val nearExisting = preloadedNodes.firstOrNull { existing ->
+                                existing.id != lastRecordedNode?.id &&
+                                kotlin.math.abs(existing.alt - corrAlt) <= 1.5 &&
+                                NavGraphPathfinder.haversine(
+                                    corrLat, corrLon, existing.lat, existing.lon
+                                ) < MIN_NODE_DISTANCE_M
+                            }
+
+                            if (distFromLast >= MIN_NODE_DISTANCE_M) {
+                                if (nearExisting != null) {
+                                    // ── Merge: already covered by a previous session ─────
+                                    // Don't create a duplicate node.  Adopt the existing
+                                    // node as the current chain anchor so that when the
+                                    // path later enters new territory the new node will
+                                    // bridge back to the existing graph correctly.
+                                    val prevNode = lastRecordedNode
+                                    lastRecordedNode = nearExisting
+                                    lastCaptureTime  = now
                                     if (prevNode != null) {
-                                        db.navDao().insertEdge(
-                                            NavEdge(
-                                                fromId = prevNode.id,
-                                                toId   = newNode.id,
-                                                weight = NavGraphPathfinder.haversine(
-                                                    prevNode.lat, prevNode.lon,
-                                                    newNode.lat,  newNode.lon
+                                        scope.launch {
+                                            val d = NavGraphPathfinder.haversine(
+                                                prevNode.lat, prevNode.lon,
+                                                nearExisting.lat, nearExisting.lon
+                                            )
+                                            db.navDao().insertEdge(NavEdge(prevNode.id, nearExisting.id, d))
+                                            db.navDao().insertEdge(NavEdge(nearExisting.id, prevNode.id, d))
+                                            sessionEdges += 2
+                                            statusMsg = "Following existing path…"
+                                        }
+                                    }
+                                } else {
+                                    // ── New node: this position has no existing coverage ──
+                                    val newNode  = NavNode(
+                                        id    = UUID.randomUUID().toString(),
+                                        lat   = corrLat,
+                                        lon   = corrLon,
+                                        alt   = corrAlt,
+                                        floor = currentFloor
+                                    )
+                                    val prevNode     = lastRecordedNode
+                                    lastRecordedNode = newNode
+                                    lastCaptureTime  = now
+
+                                    scope.launch {
+                                        db.navDao().insertNode(newNode)
+                                        sessionNodes++
+                                        if (prevNode != null) {
+                                            db.navDao().insertEdge(
+                                                NavEdge(
+                                                    fromId = prevNode.id,
+                                                    toId   = newNode.id,
+                                                    weight = NavGraphPathfinder.haversine(
+                                                        prevNode.lat, prevNode.lon,
+                                                        newNode.lat,  newNode.lon
+                                                    )
                                                 )
                                             )
-                                        )
-                                        sessionEdges++
-                                    }
-                                    // Auto-bridge to nearby pre-recorded segments within
-                                    // SEGMENT_SNAP_RADIUS_M (wider than MIN_NODE_DISTANCE_M
-                                    // so junctions get connected even if not perfectly
-                                    // aligned).  Altitude guard prevents cross-floor bridges.
-                                    val bridges = preloadedNodes.filter { existing ->
-                                        existing.id != newNode.id &&
-                                        existing.id != prevNode?.id &&
-                                        kotlin.math.abs(existing.alt - newNode.alt) <= 1.5 &&
-                                        NavGraphPathfinder.haversine(
-                                            newNode.lat, newNode.lon, existing.lat, existing.lon
-                                        ) <= SEGMENT_SNAP_RADIUS_M
-                                    }
-                                    for (nearby in bridges) {
-                                        val d = NavGraphPathfinder.haversine(
-                                            newNode.lat, newNode.lon,
-                                            nearby.lat,  nearby.lon
-                                        )
-                                        db.navDao().insertEdge(NavEdge(newNode.id, nearby.id, d))
-                                        db.navDao().insertEdge(NavEdge(nearby.id, newNode.id, d))
-                                        sessionEdges += 2
-                                    }
-                                    if (bridges.isNotEmpty()) {
-                                        statusMsg = "Auto-bridged to ${bridges.size} nearby segment(s)"
+                                            sessionEdges++
+                                        }
+                                        // Auto-bridge to nearby pre-recorded segments within
+                                        // SEGMENT_SNAP_RADIUS_M (wider than MIN_NODE_DISTANCE_M
+                                        // so junctions get connected even if not perfectly
+                                        // aligned).  Altitude guard prevents cross-floor bridges.
+                                        val bridges = preloadedNodes.filter { existing ->
+                                            existing.id != newNode.id &&
+                                            existing.id != prevNode?.id &&
+                                            kotlin.math.abs(existing.alt - newNode.alt) <= 1.5 &&
+                                            NavGraphPathfinder.haversine(
+                                                newNode.lat, newNode.lon, existing.lat, existing.lon
+                                            ) <= SEGMENT_SNAP_RADIUS_M
+                                        }
+                                        for (nearby in bridges) {
+                                            val d = NavGraphPathfinder.haversine(
+                                                newNode.lat, newNode.lon,
+                                                nearby.lat,  nearby.lon
+                                            )
+                                            db.navDao().insertEdge(NavEdge(newNode.id, nearby.id, d))
+                                            db.navDao().insertEdge(NavEdge(nearby.id, newNode.id, d))
+                                            sessionEdges += 2
+                                        }
+                                        if (bridges.isNotEmpty()) {
+                                            statusMsg = "Auto-bridged to ${bridges.size} nearby segment(s)"
+                                        }
                                     }
                                 }
                             }
@@ -670,14 +701,26 @@ internal fun AdminRecordingScreen(
                         scope.launch {
                             preloadedNodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
                             preloadedEdges = withContext(Dispatchers.IO) { db.navDao().getAllEdges() }
-                            // Derive canonical floor altitude from existing nodes so new
-                            // nodes share a consistent height even if GPS drifted since
-                            // the original recording.
-                            currentFloorAlt = preloadedNodes
-                                .filter { it.floor == currentFloor }
-                                .map { it.alt }
-                                .takeIf { it.isNotEmpty() }
-                                ?.sorted()?.let { it[it.size / 2] }  // median
+                            floorGpsAccumulator.clear()
+                            // Prefer the table's canonical altitude — it is the stable value
+                            // established at first recording. Fall back to node median, then
+                            // null (GPS accumulator in capture loop handles a brand-new floor).
+                            val tableAlt = withContext(Dispatchers.IO) { db.floorAltDao().getAlt(currentFloor) }
+                            currentFloorAlt = tableAlt ?: run {
+                                val nodeMedian = preloadedNodes
+                                    .filter { it.floor == currentFloor }
+                                    .map { it.alt }
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.sorted()?.let { it[it.size / 2] }
+                                // Persist the node median so QR calibration uses the
+                                // same value and the table is ready for next session.
+                                if (nodeMedian != null) {
+                                    withContext(Dispatchers.IO) {
+                                        db.floorAltDao().upsert(FloorAltitude(currentFloor, nodeMedian))
+                                    }
+                                }
+                                nodeMedian
+                            }
                             statusMsg = "Recording — walk the corridor"
                         }
                     } else {

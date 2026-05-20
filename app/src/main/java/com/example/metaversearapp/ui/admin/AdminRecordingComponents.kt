@@ -546,10 +546,11 @@ internal fun DoorManagementDialog(
  */
 @Composable
 internal fun DoorLinkPickerDialog(
-    candidates: List<Pair<QrLocation, Double>>,
-    onLink:     (QrLocation) -> Unit,
-    onScanQr:   (() -> Unit)? = null,
-    onDismiss:  () -> Unit,
+    candidates:   List<Pair<QrLocation, Double>>,
+    onLink:       (QrLocation) -> Unit,
+    showDistance: Boolean         = true,
+    onScanQr:     (() -> Unit)?   = null,
+    onDismiss:    () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
 
@@ -640,9 +641,15 @@ internal fun DoorLinkPickerDialog(
                                     )
                                     Text(
                                         buildString {
-                                            append("${dist.toInt()} m away")
-                                            if (qr.building.isNotBlank()) append("  ·  ${qr.building}")
-                                            if (qr.floor.isNotBlank())    append("  ·  Floor ${qr.floor}")
+                                            if (showDistance) {
+                                                append("${dist.toInt()} m")
+                                                if (qr.building.isNotBlank() || qr.floor.isNotBlank()) append("  ·  ")
+                                            }
+                                            if (qr.building.isNotBlank()) {
+                                                append(qr.building)
+                                                if (qr.floor.isNotBlank()) append("  ·  ")
+                                            }
+                                            if (qr.floor.isNotBlank()) append("Floor ${qr.floor}")
                                         },
                                         color    = Color.Gray,
                                         fontSize = 11.sp

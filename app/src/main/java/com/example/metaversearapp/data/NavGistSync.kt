@@ -78,12 +78,16 @@ object NavGistSync {
     }
 
     /**
-     * Serialises [nodes] + [edges] and PATCHes them to the configured Gist.
+     * Serialises [nodes] + [edges] + [floorAltitudes] and PATCHes them to the configured Gist.
      * Requires [BuildConfig.GITHUB_TOKEN] and [BuildConfig.NAV_GRAPH_GIST_ID].
      *
      * @return [Result.success] on HTTP 2xx, [Result.failure] otherwise.
      */
-    suspend fun upload(nodes: List<NavNode>, edges: List<NavEdge>): Result<Unit> {
+    suspend fun upload(
+        nodes: List<NavNode>,
+        edges: List<NavEdge>,
+        floorAltitudes: Map<String, Double> = emptyMap()
+    ): Result<Unit> {
         val gistId = resolveGistId(BuildConfig.NAV_GRAPH_GIST_ID)
         val token  = BuildConfig.GITHUB_TOKEN
         if (gistId.isBlank() || token.isBlank()) {
@@ -94,7 +98,7 @@ object NavGistSync {
             )
         }
 
-        val payload = prettyJson.encodeToString(NavGraphExport(nodes, edges))
+        val payload = prettyJson.encodeToString(NavGraphExport(nodes, edges, floorAltitudes))
         val body    = GistPatchRequest(
             files = mapOf(NAVGRAPH_FILENAME to GistFileContent(content = payload))
         )

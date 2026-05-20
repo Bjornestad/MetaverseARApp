@@ -230,6 +230,7 @@ fun ARScreen(
                             anchorQx, anchorQy, anchorQz, anchorQw,
                             candidate.lat,
                             candidate.lon,
+                            candidate.alt,
                             candidate.cloudAnchorHeading,
                             candidate.cloudAnchorId!!
                         )

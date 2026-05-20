@@ -7,14 +7,15 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [QrLocation::class, NavNode::class, NavEdge::class],
-    version = 7,
+    entities = [QrLocation::class, NavNode::class, NavEdge::class, FloorAltitude::class],
+    version = 8,
     exportSchema = false
 )
 @TypeConverters(NodeTypeConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun qrDao(): QrDao
     abstract fun navDao(): NavDao
+    abstract fun floorAltDao(): FloorAltDao
 }
 
 /**
@@ -63,6 +64,18 @@ val MIGRATION_6_7 = object : Migration(6, 7) {
     override fun migrate(database: SupportSQLiteDatabase) {
         database.execSQL(
             "ALTER TABLE qr_locations ADD COLUMN facingDeg REAL"
+        )
+    }
+}
+
+/**
+ * Adds the [FloorAltitude] table. Canonical GPS altitude per floor label,
+ * established at first recording and shared across all sessions.
+ */
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            "CREATE TABLE IF NOT EXISTS floor_altitudes (floor TEXT NOT NULL PRIMARY KEY, alt REAL NOT NULL)"
         )
     }
 }

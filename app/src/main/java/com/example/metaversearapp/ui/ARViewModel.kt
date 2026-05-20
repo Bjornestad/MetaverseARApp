@@ -337,7 +337,12 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 }
                 val refLat = doorNode?.lat ?: loc.lat
                 val refLon = doorNode?.lon ?: loc.lon
-                val refAlt = loc.alt   // altitude stays from QrLocation (door nodes don't store alt)
+                // Prefer the canonical floor altitude from the table — it is the same value
+                // nodes were recorded with, so (node.alt - refAlt) ≈ 0 for same-floor nodes
+                // and arrows land exactly at floor level.  Fall back to the QrLocation's GPS
+                // altitude if the table has no entry for this floor yet.
+                val refAlt = withContext(Dispatchers.IO) { db.floorAltDao().getAlt(loc.floor) }
+                    ?: loc.alt
 
                 latOffset = scanPose.latitude - refLat
                 lonOffset = scanPose.longitude - refLon
@@ -717,6 +722,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         anchorQx: Float, anchorQy: Float, anchorQz: Float, anchorQw: Float,
         refLat: Double,
         refLon: Double,
+        refAlt: Double,
         storedHeading: Double?,
         anchorId: String
     ) {
@@ -745,10 +751,6 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         // AR space.  From that point all arrows use createLocalArrowAnchor, which gives
         // correct floor height (ref.ty − 1.7 m) and compass-accurate pointing — no GPS.
         //
-        // Nav nodes store corrAlt = pose.altitude − altOffset_at_recording ≈ 0 for a
-        // flat corridor, so refAlt = 0.0 keeps (alt − refAlt) near zero and arrows land
-        // at floor level.  Stair altitude differences are handled by the non-zero
-        // corrAlt values recorded during the admin walk.
         val fwX = -2f * (anchorQx * anchorQz + anchorQy * anchorQw)
         val fwZ = -1f + 2f * (anchorQx * anchorQx + anchorQy * anchorQy)
         val horizLen = sqrt(fwX * fwX + fwZ * fwZ)
@@ -761,7 +763,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             tx = anchorTx, ty = anchorTy, tz = anchorTz,
             northX = cosH * fwXn + sinH * fwZn,
             northZ = -sinH * fwXn + cosH * fwZn,
-            refLat = refLat, refLon = refLon, refAlt = 0.0
+            refLat = refLat, refLon = refLon, refAlt = refAlt
         )
 
         // Debug overlay

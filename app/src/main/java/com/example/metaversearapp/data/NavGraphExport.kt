@@ -6,5 +6,6 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class NavGraphExport(
     val nodes: List<NavNode>,
-    val edges: List<NavEdge>
+    val edges: List<NavEdge>,
+    val floorAltitudes: Map<String, Double> = emptyMap()
 )
