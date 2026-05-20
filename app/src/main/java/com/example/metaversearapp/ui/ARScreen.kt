@@ -170,79 +170,76 @@ fun ARScreen(
     }
 
     // --- CLOUD ANCHOR RESOLUTION ---
-    // When VPS is tracking, find the nearest unresolved cloud-anchor node within 15 m
-    // and resolve it. A successful resolve calibrates the lat/lon offsets via the
-    // geospatial pose of the resolved anchor (cm-accurate, unlike GPS).
+    // Polls every 3 s while VPS is tracking. Each poll finds the nearest
+    // unresolved cloud-anchor node within 15 m and resolves it. On success,
+    // onCloudAnchorResolved rebuilds localArRef (same path as a QR scan),
+    // giving cm-accurate arrow placement for the next corridor segment.
+    // The next poll then picks up the following anchor along the route —
+    // progressive re-calibration as the user walks past each hosted anchor.
     //
-    // earthRef.value is intentionally NOT a key here: session.earth returns a new
-    // Java wrapper object on every ARCore frame, which would fire a state change
-    // 60×/s and restart this effect continuously.  earthTrackingState covers the
-    // only transitions we care about (STOPPED → TRACKING), and earthRef.value is
-    // read inside the body where it is always populated by the time tracking is active.
+    // earthRef is read inside the loop (not a key) because session.earth
+    // returns a new Java wrapper each frame and would restart the effect 60×/s.
     LaunchedEffect(
         viewModel.earthTrackingState,
         viewModel.navNodes,
-        viewModel.isResolvingCloudAnchor,
         sessionRef.value
     ) {
         if (viewModel.earthTrackingState != TrackingState.TRACKING) return@LaunchedEffect
-        if (viewModel.isResolvingCloudAnchor) return@LaunchedEffect
-        val earth   = earthRef.value ?: return@LaunchedEffect
         val session = sessionRef.value ?: return@LaunchedEffect
 
-        val userPose = earth.cameraGeospatialPose
-        val candidate = viewModel.navNodes
-            .filter { it.cloudAnchorId != null && it.cloudAnchorId !in resolvedAnchorIds }
-            .minByOrNull {
-                NavGraphPathfinder.haversine(userPose.latitude, userPose.longitude, it.lat, it.lon)
-            } ?: return@LaunchedEffect
+        while (true) {
+            delay(3_000L)
+            if (viewModel.isResolvingCloudAnchor) continue
+            val earth = earthRef.value ?: continue
 
-        val dist = NavGraphPathfinder.haversine(
-            userPose.latitude, userPose.longitude, candidate.lat, candidate.lon
-        )
-        if (dist > 15.0) return@LaunchedEffect
+            val userPose = earth.cameraGeospatialPose
+            val candidate = viewModel.navNodes
+                .filter { it.cloudAnchorId != null && it.cloudAnchorId !in resolvedAnchorIds }
+                .minByOrNull {
+                    NavGraphPathfinder.haversine(userPose.latitude, userPose.longitude, it.lat, it.lon)
+                } ?: continue
 
-        // Mark as in-flight immediately to prevent duplicate resolves
-        viewModel.isResolvingCloudAnchor = true
-        resolvedAnchorIds.add(candidate.cloudAnchorId!!)
+            val dist = NavGraphPathfinder.haversine(
+                userPose.latitude, userPose.longitude, candidate.lat, candidate.lon
+            )
+            if (dist > 15.0) continue
 
-        session.resolveCloudAnchorAsync(candidate.cloudAnchorId) { anchor, state ->
-            // This callback runs on the GL rendering thread.  All Compose state
-            // mutations and non-thread-safe collections (resolvedAnchorIds) must
-            // run on the main thread — use scope.launch for that.
-            // ARCore anchor/earth operations (getGeospatialPose, detach) are safe
-            // on the GL thread and must happen here before the anchor is invalidated.
-            if (state == CloudAnchorState.SUCCESS) {
-                val geoPose = earth.getGeospatialPose(anchor.pose)
-                // Capture the anchor's local AR-space pose BEFORE detaching —
-                // anchor.pose is invalid after detach().  These values let
-                // onCloudAnchorResolved build a localArRef (exactly like a QR
-                // scan) so all arrows switch to the local-coordinate path:
-                // correct floor height, compass-accurate direction, no GPS drift.
-                val anchorTx = anchor.pose.tx()
-                val anchorTy = anchor.pose.ty()
-                val anchorTz = anchor.pose.tz()
-                val anchorQx = anchor.pose.qx()
-                val anchorQy = anchor.pose.qy()
-                val anchorQz = anchor.pose.qz()
-                val anchorQw = anchor.pose.qw()
-                anchor.detach()
-                scope.launch {   // → main thread
-                    viewModel.onCloudAnchorResolved(
-                        geoPose,
-                        anchorTx, anchorTy, anchorTz,
-                        anchorQx, anchorQy, anchorQz, anchorQw,
-                        candidate.lat,
-                        candidate.lon,
-                        candidate.cloudAnchorHeading,
-                        candidate.cloudAnchorId!!
-                    )
-                }
-            } else {
-                // Allow retry on failure
-                scope.launch {   // → main thread
-                    resolvedAnchorIds.remove(candidate.cloudAnchorId)
-                    viewModel.isResolvingCloudAnchor = false
+            // Mark in-flight before the async call to prevent duplicate resolves
+            // across poll ticks.
+            viewModel.isResolvingCloudAnchor = true
+            resolvedAnchorIds.add(candidate.cloudAnchorId!!)
+
+            session.resolveCloudAnchorAsync(candidate.cloudAnchorId) { anchor, state ->
+                // Callback runs on the GL thread. ARCore operations (getGeospatialPose,
+                // pose reads, detach) must happen here before the anchor is invalidated.
+                // Compose state mutations go via scope.launch → main thread.
+                if (state == CloudAnchorState.SUCCESS) {
+                    val geoPose  = earth.getGeospatialPose(anchor.pose)
+                    val anchorTx = anchor.pose.tx()
+                    val anchorTy = anchor.pose.ty()
+                    val anchorTz = anchor.pose.tz()
+                    val anchorQx = anchor.pose.qx()
+                    val anchorQy = anchor.pose.qy()
+                    val anchorQz = anchor.pose.qz()
+                    val anchorQw = anchor.pose.qw()
+                    anchor.detach()
+                    scope.launch {
+                        viewModel.onCloudAnchorResolved(
+                            geoPose,
+                            anchorTx, anchorTy, anchorTz,
+                            anchorQx, anchorQy, anchorQz, anchorQw,
+                            candidate.lat,
+                            candidate.lon,
+                            candidate.cloudAnchorHeading,
+                            candidate.cloudAnchorId!!
+                        )
+                    }
+                } else {
+                    // Failed — allow retry on next poll
+                    scope.launch {
+                        resolvedAnchorIds.remove(candidate.cloudAnchorId)
+                        viewModel.isResolvingCloudAnchor = false
+                    }
                 }
             }
         }
