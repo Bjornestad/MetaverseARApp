@@ -28,6 +28,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.example.metaversearapp.data.NavEdge
 import com.example.metaversearapp.data.NavNode
+import com.example.metaversearapp.data.NodeType
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.XYTileSource
 import org.osmdroid.util.GeoPoint
@@ -99,6 +100,14 @@ private class NavGraphOverlay : Overlay() {
         color = android.graphics.Color.argb(0xFF, 0x0D, 0x11, 0x17)
         style = Paint.Style.FILL
     }
+    private val doorPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.argb(200, 0xFF, 0xA7, 0x26)  // orange
+        style = Paint.Style.FILL
+    }
+    private val stairPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = android.graphics.Color.argb(200, 0x66, 0xBB, 0x6A)  // green
+        style = Paint.Style.FILL
+    }
 
     override fun draw(
         canvas  : android.graphics.Canvas,
@@ -120,10 +129,16 @@ private class NavGraphOverlay : Overlay() {
                             pb.x.toFloat(), pb.y.toFloat(), edgePaint)
         }
 
-        // ── Nav nodes ────────────────────────────────────────────────────────
+        // ── Nav nodes (type-differentiated) ──────────────────────────────────
         nodes.forEach { node ->
             val p = proj.toPixels(GeoPoint(node.lat, node.lon), ptBuf)
-            canvas.drawCircle(p.x.toFloat(), p.y.toFloat(), 3f, nodePaint)
+            val px = p.x.toFloat(); val py = p.y.toFloat()
+            when (node.type) {
+                NodeType.DOOR -> canvas.drawRect(px - 4f, py - 4f, px + 4f, py + 4f, doorPaint)
+                NodeType.STAIR_TOP, NodeType.STAIR_MIDDLE, NodeType.STAIR_BOTTOM ->
+                    canvas.drawCircle(px, py, 5f, stairPaint)
+                else -> canvas.drawCircle(px, py, 3f, nodePaint)
+            }
         }
 
         // ── Active route ─────────────────────────────────────────────────────

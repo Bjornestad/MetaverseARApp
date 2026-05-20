@@ -60,6 +60,16 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         showArrivalBanner = true
     }
 
+    fun resetCalibration() {
+        localArRef    = null
+        latOffset     = 0.0
+        lonOffset     = 0.0
+        altOffset     = 0.0
+        headingOffset = 0.0
+        isCalibrated  = false
+        statusText    = "Calibration reset — scan a QR or wait for cloud anchor"
+    }
+
     fun dismissArrivalBanner() {
         showArrivalBanner    = false
         selectedDestination  = null

@@ -252,6 +252,24 @@ fun ARUiOverlay(
                         )
                     }
 
+                    // Reset calibration — only shown when calibrated so it's
+                    // not a distraction during normal use.
+                    if (viewModel.isCalibrated) {
+                        OutlinedIconButton(
+                            onClick = { viewModel.resetCalibration() },
+                            colors  = IconButtonDefaults.outlinedIconButtonColors(
+                                contentColor = Color(0xFFFF6B6B)
+                            ),
+                            border  = BorderStroke(1.dp, Color(0xFFFF6B6B).copy(alpha = 0.6f))
+                        ) {
+                            Icon(
+                                Icons.Default.SyncDisabled,
+                                contentDescription = "Reset calibration",
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
                 }
             }
         }

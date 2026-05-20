@@ -372,8 +372,14 @@ fun ARScreen(
     }
 
     // --- DESTINATION ANCHOR LOGIC ---
+    // The marker must be co-located with the final arrow, so we use the last
+    // node in destinationPathNodes (the actual graph endpoint A* lands on) rather
+    // than the QrLocation's survey coordinates.  QrLocation and the door NavNode
+    // have independently-recorded GPS positions that can differ by several metres,
+    // which previously caused the marker and the last arrow to diverge.
     LaunchedEffect(
         viewModel.selectedDestination,
+        viewModel.destinationPathNodes,
         viewModel.isCalibrated,
         viewModel.latOffset,
         viewModel.lonOffset,
@@ -385,17 +391,29 @@ fun ARScreen(
         val dest     = viewModel.selectedDestination ?: return@LaunchedEffect
         val localRef = viewModel.localArRef
         val session  = sessionRef.value
+
+        // Last path node is the door NavNode; fall back to QrLocation coords only
+        // when the path hasn't been computed yet.
+        val endNode   = viewModel.destinationPathNodes.lastOrNull()
+        val markerLat = endNode?.lat ?: dest.lat
+        val markerLon = endNode?.lon ?: dest.lon
+        val markerAlt = endNode?.alt ?: dest.alt
+
         roomAnchor?.detach()
         roomAnchor = if (localRef != null && session != null) {
-            createLocalRoomAnchor(session, localRef, dest.lat, dest.lon, dest.alt)
+            createLocalRoomAnchor(session, localRef, markerLat, markerLon, markerAlt)
         } else {
             val currentEarth = earthRef.value ?: return@LaunchedEffect
             if (viewModel.earthTrackingState != TrackingState.TRACKING) return@LaunchedEffect
-            val floorAlt = (viewModel.geospatialPose?.altitude ?: (dest.alt + viewModel.altOffset)) - 1.7
+            // Use the same altitude formula as the arrows: node alt + calibration offset.
+            // The previous code used the user's *current* GPS altitude here, which put the
+            // marker at the user's floor level rather than the destination's floor level.
+            val altOffset     = if (viewModel.isCalibrated) viewModel.altOffset
+                                else (viewModel.geospatialPose?.altitude ?: markerAlt) - markerAlt
             currentEarth.createAnchor(
-                dest.lat + viewModel.latOffset,
-                dest.lon + viewModel.lonOffset,
-                floorAlt,
+                markerLat + viewModel.latOffset,
+                markerLon + viewModel.lonOffset,
+                markerAlt + altOffset - 1.7,
                 0f, 0f, 0f, 1f
             )
         }
