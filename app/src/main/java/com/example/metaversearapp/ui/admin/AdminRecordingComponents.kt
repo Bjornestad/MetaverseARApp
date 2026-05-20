@@ -533,69 +533,22 @@ internal fun DoorManagementDialog(
     )
 }
 
-// ── Door QR prompt ─────────────────────────────────────────────────────────────
-
-/**
- * Shown immediately after marking a node as DOOR.
- * Admin can choose to scan the QR code posted at this door, or skip to leave
- * the door GPS-only (cloud anchors handle precision calibration instead).
- */
-@Composable
-internal fun DoorQrPromptDialog(
-    onScanQr: () -> Unit,
-    onSkip:   () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onSkip,
-        containerColor   = Color(0xFF1E1E1E),
-        title = {
-            Text(
-                "Link QR code to this door?",
-                color      = Color(0xFF64FFDA),
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Text(
-                "Point the camera at the QR code on this door to link it, or skip to keep it GPS-only.",
-                color    = Color.White.copy(alpha = 0.8f),
-                fontSize = 14.sp
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = onScanQr,
-                colors  = ButtonDefaults.buttonColors(containerColor = Color(0xFF64FFDA))
-            ) {
-                Icon(
-                    Icons.Default.QrCodeScanner,
-                    contentDescription = null,
-                    tint     = Color.Black,
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(Modifier.width(6.dp))
-                Text("Scan QR", color = Color.Black, fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onSkip) {
-                Text("Skip — GPS only", color = Color.Gray)
-            }
-        }
-    )
-}
-
 // ── Door → QR link picker dialog ───────────────────────────────────────────────
 
 /**
  * Dialog shown after the admin marks a node as DOOR.
  * All known rooms are shown in a searchable, scrollable list so the admin can
  * find and link any room regardless of its distance from the door node.
+ *
+ * [onScanQr] is optional — when provided (recording screen only), a "Scan QR"
+ * button appears as an alternative to manual room selection.  When null (hub
+ * screen re-link flow) the button is hidden.
  */
 @Composable
 internal fun DoorLinkPickerDialog(
     candidates: List<Pair<QrLocation, Double>>,
     onLink:     (QrLocation) -> Unit,
+    onScanQr:   (() -> Unit)? = null,
     onDismiss:  () -> Unit,
 ) {
     var query by remember { mutableStateOf("") }
@@ -701,7 +654,23 @@ internal fun DoorLinkPickerDialog(
                 }
             }
         },
-        confirmButton = {},
+        confirmButton = {
+            if (onScanQr != null) {
+                OutlinedButton(
+                    onClick = onScanQr,
+                    border  = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f)),
+                    colors  = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF64FFDA))
+                ) {
+                    Icon(
+                        Icons.Default.QrCodeScanner,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text("Scan QR")
+                }
+            }
+        },
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Skip — leave unlinked", color = Color.Gray)
