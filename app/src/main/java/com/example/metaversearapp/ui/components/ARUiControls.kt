@@ -256,13 +256,23 @@ fun ARUiOverlay(
             }
         }
 
-        // ── BOTTOM-LEFT: minimap ─────────────────────────────────────────────
-        MiniMap(
-            viewModel = viewModel,
-            modifier  = Modifier
-                .align(Alignment.BottomStart)
-                .padding(start = 16.dp, bottom = 82.dp)  // clears the control card
-        )
+        // ── BOTTOM-LEFT: minimap (tiled world map) ────────────────────────────
+        viewModel.geospatialPose?.let { pose ->
+            val userLat = pose.latitude  - viewModel.latOffset
+            val userLon = pose.longitude - viewModel.lonOffset
+            val heading = (pose.heading  + viewModel.headingOffset + 360.0) % 360.0
+            TiledMiniMap(
+                lat       = userLat,
+                lon       = userLon,
+                heading   = heading,
+                nodes     = viewModel.navNodes,
+                edges     = viewModel.navEdges,
+                pathNodes = viewModel.destinationPathNodes,
+                modifier  = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 82.dp)
+            )
+        }
 
         // ── Arrival notification ─────────────────────────────────────────────
         if (viewModel.showArrivalBanner) {

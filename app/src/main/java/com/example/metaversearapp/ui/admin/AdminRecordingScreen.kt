@@ -23,6 +23,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.NavEdge
 import com.example.metaversearapp.data.NavGraphPathfinder
+import com.example.metaversearapp.ui.components.TiledMiniMap
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
@@ -113,6 +114,7 @@ internal fun AdminRecordingScreen(
     // so we don't need a separate bridgedNodeIds set — every nearby node gets a bridge
     // attempt on every new node, and the DB deduplicates silently.
     var preloadedNodes by remember { mutableStateOf<List<NavNode>>(emptyList()) }
+    var preloadedEdges by remember { mutableStateOf<List<NavEdge>>(emptyList()) }
 
     // ── Cloud Anchor state ─────────────────────────────────────────────────────
     var arSession        by remember { mutableStateOf<Session?>(null) }
@@ -273,7 +275,7 @@ internal fun AdminRecordingScreen(
         }
     }
 
-    /** Snaps [pendingDoorNode] to [qr]'s ground-truth coords and persists the link. */
+    /** Links [pendingDoorNode] to [qr] (stores ID + label) without moving the node. */
     fun linkDoorToQr(qr: QrLocation) {
         val node = pendingDoorNode ?: return
         // Snapshot the hardware compass heading now — admin is standing in front
@@ -281,12 +283,12 @@ internal fun AdminRecordingScreen(
         // Stored so onQrScanned() can use it as ground truth instead of GPS bearing.
         val capturedFacingDeg = sensorHeading
         scope.launch {
+            // Keep lat/lon/alt from the recorded walk-through position.
+            // QR codes sit on walls, so snapping to qr.lat/lon would pull the
+            // door node off-centre and inflate apparent corridor width.
             val linked = node.copy(
                 anchorQrId = qr.qrID,
-                label      = qr.name,
-                lat        = qr.lat,
-                lon        = qr.lon,
-                alt        = if (qr.alt != 0.0) qr.alt else node.alt
+                label      = qr.name
             )
             db.navDao().updateNode(linked)
             reweightEdgesForNode(linked)
@@ -596,6 +598,23 @@ internal fun AdminRecordingScreen(
             ) { CircularProgressIndicator(color = Color(0xFF64FFDA)) }
         }
 
+        // ── BOTTOM-LEFT: tiled minimap ────────────────────────────────────────
+        geospatialPose?.let { pose ->
+            val corrLat = pose.latitude  - latOffset
+            val corrLon = pose.longitude - lonOffset
+            val heading = (pose.heading  + 360.0) % 360.0
+            TiledMiniMap(
+                lat      = corrLat,
+                lon      = corrLon,
+                heading  = heading,
+                nodes    = preloadedNodes,
+                edges    = preloadedEdges,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 16.dp, bottom = 230.dp)
+            )
+        }
+
         // HUD overlay
         Column(
             modifier            = Modifier.fillMaxSize().padding(12.dp),
@@ -632,6 +651,7 @@ internal fun AdminRecordingScreen(
                         lastNodeType     = NodeType.WAYPOINT
                         scope.launch {
                             preloadedNodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
+                            preloadedEdges = withContext(Dispatchers.IO) { db.navDao().getAllEdges() }
                             statusMsg = "Recording — walk the corridor"
                         }
                     } else {
