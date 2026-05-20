@@ -307,6 +307,34 @@ fun GeospatialBottomOverlay(viewModel: ARViewModel, modifier: Modifier = Modifie
                     color = Color(0xFFFFCC80).copy(alpha = 0.9f)
                 )
             }
+
+            // Floor indicator — always shown when nav nodes are loaded
+            val floor = viewModel.currentFloor
+            if (floor != null || viewModel.navNodes.isNotEmpty()) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    color    = Color.White.copy(alpha = 0.1f)
+                )
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Text(
+                        "Floor:",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.White.copy(alpha = 0.6f)
+                    )
+                    Text(
+                        if (floor != null) "F$floor"
+                        else if (!viewModel.isCalibrated) "— (not calibrated)"
+                        else "—",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (floor != null) Color(0xFF64FFDA)
+                                else Color.White.copy(alpha = 0.4f)
+                    )
+                }
+            }
         }
     }
 }

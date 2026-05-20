@@ -250,12 +250,15 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
   <div class="sep"></div>
 
   <!-- Edit actions -->
-  <button class="act-btn danger" id="deleteSelBtn" onclick="deleteSelected()" disabled>🗑 Delete Selected (<span id="selCount">0</span>)</button>
-  <button class="act-btn warn"   id="trimZoneBtn"  onclick="trimToZones()"    disabled>✂️ Trim to Zones (<span id="zoneCount">0</span>)</button>
-  <button class="act-btn"        id="clearZoneBtn" onclick="clearZones()"     disabled>🧹 Clear Zones</button>
-  <button class="act-btn"        id="undoBtn"      onclick="undo()"           disabled>↩ Undo</button>
-  <button class="act-btn"        id="selAllBtn"    onclick="selectAll()"      disabled>☑ Select All</button>
-  <button class="act-btn"        id="deselBtn"     onclick="deselect()"       disabled>✕ Deselect</button>
+  <button class="act-btn danger" id="deleteSelBtn"  onclick="deleteSelected()"  disabled>🗑 Delete Selected (<span id="selCount">0</span>)</button>
+  <button class="act-btn"        id="hideSelBtn"    onclick="hideSelected()"    disabled>👁 Hide Selected</button>
+  <button class="act-btn"        id="unhideAllBtn"  onclick="unhideAll()"       disabled>👁 Show Hidden (<span id="hiddenCount">0</span>)</button>
+  <button class="act-btn warn"   id="trimZoneBtn"   onclick="trimToZones()"     disabled>✂️ Trim to Zones (<span id="zoneCount">0</span>)</button>
+  <button class="act-btn"        id="clearZoneBtn"  onclick="clearZones()"      disabled>🧹 Clear Zones</button>
+  <button class="act-btn"        id="undoBtn"       onclick="undo()"            disabled>↩ Undo</button>
+  <button class="act-btn"        id="selAllBtn"     onclick="selectAll()"       disabled>☑ Select All</button>
+  <button class="act-btn"        id="selHiddenBtn"  onclick="selectHidden()"    disabled>☑ Select Hidden</button>
+  <button class="act-btn"        id="deselBtn"      onclick="deselect()"        disabled>✕ Deselect</button>
 
   <div class="sep"></div>
   <span class="tb-label">Floor:</span>
@@ -314,6 +317,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
     <div class="leg-row"><div class="leg-dot" style="background:#f87171;border:2px dashed #f87171"></div> Disconnected</div>
     <div class="leg-row"><div class="leg-dot" style="background:transparent;border:2px dashed #fde047"></div> Cloud anchor</div>
     <div class="leg-row"><div class="leg-line" style="background:#2dd4bf"></div> QR facing dir.</div>
+    <div class="leg-row"><div class="leg-dot" style="background:#a78bfa;opacity:.35"></div> Hidden</div>
     <strong style="margin-top:6px">Edges</strong>
     <div class="leg-row"><div class="leg-line" style="background:#38bdf8"></div> Normal</div>
     <div class="leg-line" style="background:transparent"></div>
@@ -325,6 +329,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
     <span>Mode: <b id="modeLabel">View</b></span>
     <span>Selected: <span id="sel-count">0</span> nodes</span>
     <span>Zones: <span id="zone-count">0</span></span>
+    <span id="hidden-status" style="display:none">Hidden: <span id="hidden-count" style="color:#a78bfa;font-weight:600">0</span></span>
     <span id="status-hint" style="color:#555">Click a node to inspect it</span>
   </div>
 </div>
@@ -395,6 +400,7 @@ let graphData   = null;   // { nodes: [], edges: [] }
 let undoStack   = [];     // snapshots before destructive ops
 let mode        = 'view'; // view | select | box | zone
 let selected    = new Set(); // selected node IDs
+let hiddenNodes = new Set(); // hidden node IDs (not rendered, not deleted)
 let allowedZones = [];    // array of L.LatLngBounds
 
 let activeFloors = new Set();
@@ -506,40 +512,52 @@ function render() {
     if (activeFloors.size &&
         !activeFloors.has(String(a.floor)) &&
         !activeFloors.has(String(b.floor))) return;
+    // Skip edges where both endpoints are hidden; dim edges with one hidden end
+    const aHidden = hiddenNodes.has(a.id), bHidden = hiddenNodes.has(b.id);
+    if (aHidden && bHidden) return;
 
     const p       = palette();
     const isStair = a.type?.startsWith('STAIR') || b.type?.startsWith('STAIR');
     const diff    = find(a.id) !== find(b.id);
     const color   = isStair ? p.edgeStair : diff ? p.edgeCross : p.edgeNormal;
     const dash    = diff && !isStair ? '6 4' : null;
+    const opacity = (aHidden || bHidden) ? 0.2 : 0.7;
 
     layerGroup.addLayer(L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{
-      color, weight: isStair?2.5:1.5, opacity:.7, dashArray: dash
-    }).on('click', ev=>{ L.DomEvent.stopPropagation(ev); showEdgeInfo(e,a,b); }));
+      color, weight: isStair?2.5:1.5, opacity, dashArray: dash
+    }).on('click', ev=>{ L.DomEvent.stopPropagation(ev); if (!aHidden && !bHidden) showEdgeInfo(e,a,b); }));
   });
 
   // ── Nodes ────────────────────────────────────────────────────────────
   nodes.forEach(n => {
     if (activeFloors.size && !activeFloors.has(String(n.floor))) return;
 
-    const p       = palette();
-    const isSel   = selected.has(n.id);
-    const isMain  = find(n.id) === main;
-    const fill    = isSel ? p.selected : (p.type[n.type] ?? floorColor(n.floor));
-    const stroke  = isSel ? p.selected : isMain ? p.nodeStroke : p.orphanStroke;
+    const p        = palette();
+    const isHidden = hiddenNodes.has(n.id);
+    const isSel    = selected.has(n.id);
+    const isMain   = find(n.id) === main;
+    const r        = n.type === 'DOOR' ? 7 : n.type?.startsWith('STAIR') ? 8 : 5;
+
+    // Hidden nodes: render as faint purple ghosts (still visible, not clickable in view mode)
+    const fill    = isHidden ? '#a78bfa'
+                  : isSel    ? p.selected
+                  : (p.type[n.type] ?? floorColor(n.floor));
+    const stroke  = isHidden ? '#a78bfa'
+                  : isSel    ? p.selected
+                  : isMain   ? p.nodeStroke : p.orphanStroke;
     const sWeight = isSel ? 3 : isMain ? 1 : 2.5;
-    const r       = n.type === 'DOOR' ? 7 : n.type?.startsWith('STAIR') ? 8 : 5;
 
     const circle = L.circleMarker([n.lat,n.lon],{
       radius: r, fillColor: fill, color: stroke, weight: sWeight,
-      fillOpacity: isSel ? 1 : .85, opacity: 1
+      fillOpacity: isHidden ? 0.2 : isSel ? 1 : .85,
+      opacity: isHidden ? 0.35 : 1
     });
 
     circle.on('click', ev => {
       L.DomEvent.stopPropagation(ev);
       if (mode === 'select') {
         toggleSelect(n.id);
-      } else if (mode === 'view') {
+      } else if (mode === 'view' && !isHidden) {
         showNodeInfo(n, find(n.id), size[find(n.id)], isMain);
       }
     });
@@ -547,8 +565,7 @@ function render() {
     layerGroup.addLayer(circle);
 
     // ── Cloud anchor halo + bearing arrow ────────────────────────────
-    // Use loose truthiness check so both null and undefined (stale JSON) are skipped
-    if (n.cloudAnchorId) {
+    if (!isHidden && n.cloudAnchorId) {
       const halo = L.circleMarker([n.lat, n.lon], {
         radius: r + 6, fillColor: 'transparent', fillOpacity: 0,
         color: p.anchorRing, weight: 2, opacity: .9, dashArray: '4 3'
@@ -567,7 +584,7 @@ function render() {
     }
 
     // ── QR facing arrow (facingDeg) ──────────────────────────────────
-    if (n.facingDeg != null) {
+    if (!isHidden && n.facingDeg != null) {
       const isEditing = n.id === facingEditNodeId;
       const col = isEditing ? '#f97316' : p.facingArrow; // orange tint while editing
       drawArrow(n, n.facingDeg, col, 5.0, 1.8, 2.5).forEach(l => layerGroup.addLayer(l));
@@ -612,7 +629,10 @@ function selectNodesInBounds(bounds) {
 }
 
 function selectAll() {
-  graphData?.nodes.forEach(n => { if (!activeFloors.size || activeFloors.has(String(n.floor))) selected.add(n.id); });
+  graphData?.nodes.forEach(n => {
+    if (hiddenNodes.has(n.id)) return;
+    if (!activeFloors.size || activeFloors.has(String(n.floor))) selected.add(n.id);
+  });
   updateSelUI(); render();
 }
 
@@ -621,6 +641,7 @@ function selectByType(typeName) {
   if (!graphData) return;
   setMode('select');
   graphData.nodes.forEach(n => {
+    if (hiddenNodes.has(n.id)) return;
     if (activeFloors.size && !activeFloors.has(String(n.floor))) return;
     const t = n.type || 'WAYPOINT';
     if (t === typeName) selected.add(n.id);
@@ -661,11 +682,53 @@ function deselect() {
   updateSelUI(); render();
 }
 
+/** Hide all currently selected nodes (they become faint ghosts; not deleted). */
+function hideSelected() {
+  if (!selected.size) return;
+  selected.forEach(id => hiddenNodes.add(id));
+  const count = selected.size;
+  selected.clear();
+  updateSelUI();
+  updateHiddenUI();
+  render();
+  setStatus(`Hidden ${count} node(s) — use "Show Hidden" to reveal them`);
+}
+
+/** Un-hide every hidden node. */
+function unhideAll() {
+  if (!hiddenNodes.size) return;
+  const count = hiddenNodes.size;
+  hiddenNodes.clear();
+  updateHiddenUI();
+  render();
+  setStatus(`Revealed ${count} hidden node(s)`);
+}
+
+/** Select all currently hidden nodes so they can be inspected or deleted. */
+function selectHidden() {
+  if (!graphData || !hiddenNodes.size) return;
+  setMode('select');
+  hiddenNodes.forEach(id => selected.add(id));
+  updateSelUI();
+  render();
+  setStatus(`Selected ${selected.size} hidden node(s)`);
+}
+
+function updateHiddenUI() {
+  const n = hiddenNodes.size;
+  document.getElementById('hiddenCount').textContent    = n;
+  document.getElementById('hidden-count').textContent   = n;
+  document.getElementById('unhideAllBtn').disabled      = n === 0;
+  document.getElementById('selHiddenBtn').disabled      = n === 0;
+  document.getElementById('hidden-status').style.display = n > 0 ? '' : 'none';
+}
+
 function updateSelUI() {
   const n = selected.size;
   document.getElementById('sel-count').textContent  = n;
   document.getElementById('selCount').textContent   = n;
   document.getElementById('deleteSelBtn').disabled  = n === 0;
+  document.getElementById('hideSelBtn').disabled    = n === 0;
   document.getElementById('deselBtn').disabled      = n === 0;
 }
 
@@ -683,7 +746,11 @@ function undo() {
   graphData = JSON.parse(undoStack.pop());
   if (!undoStack.length) document.getElementById('undoBtn').disabled = true;
   selected.clear();
+  // Remove any hidden IDs that no longer exist after undo
+  const ids = new Set(graphData.nodes.map(n => n.id));
+  hiddenNodes.forEach(id => { if (!ids.has(id)) hiddenNodes.delete(id); });
   updateSelUI();
+  updateHiddenUI();
   render();
   updateStats();
   setStatus('Undo applied');
@@ -1113,6 +1180,7 @@ function loadJSON(text) {
   graphData  = data;
   undoStack  = [];
   selected.clear();
+  hiddenNodes.clear();
   allowedZones = [];
   document.getElementById('undoBtn').disabled    = true;
   document.getElementById('exportBtn').disabled  = false;
@@ -1122,6 +1190,7 @@ function loadJSON(text) {
   activeFloors = new Set(floors);
   buildFloorChips(floors);
   updateSelUI();
+  updateHiddenUI();
   updateStats();
   renderZones();
   render();
@@ -1339,6 +1408,7 @@ document.addEventListener('drop', e => {
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
   if ((e.key === 'Delete' || e.key === 'Backspace') && selected.size) deleteSelected();
+  if (e.key === 'h' || e.key === 'H') { if (selected.size) hideSelected(); else unhideAll(); }
   if (e.key === 'Escape') { cancelFacingEdit(); deselect(); setMode('view'); }
   if (e.key === 'z' && (e.ctrlKey||e.metaKey)) undo();
   if (e.key === '1') setMode('view');

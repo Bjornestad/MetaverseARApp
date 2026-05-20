@@ -41,11 +41,10 @@ import kotlin.math.*
 
 @Composable
 fun ARUiOverlay(
-    viewModel           : ARViewModel,
-    showDebug           : Boolean       = false,
-    remainingWaypoints  : Int           = 0,
-    nextWaypointBearing : Double?       = null,
-    remainingPath       : List<NavNode> = emptyList()
+    viewModel          : ARViewModel,
+    showDebug          : Boolean       = false,
+    remainingWaypoints : Int           = 0,
+    remainingPath      : List<NavNode> = emptyList()
 ) {
     // Dialog lives outside the positioned columns so it can cover the full screen
     DestinationSelector(viewModel)
@@ -80,17 +79,10 @@ fun ARUiOverlay(
             // HUD compass — shown whenever VPS is tracking
             viewModel.geospatialPose?.let { pose ->
                 Spacer(modifier = Modifier.height(4.dp))
-                val destBearing = viewModel.selectedDestination?.let { dest ->
-                    segmentBearing(
-                        pose.latitude,  pose.longitude,
-                        dest.lat + viewModel.latOffset,
-                        dest.lon + viewModel.lonOffset
-                    )
-                }
                 HUDCompass(
                     heading             = (pose.heading + viewModel.headingOffset + 360.0) % 360.0,
-                    destinationBearing  = destBearing,
-                    nextWaypointBearing = nextWaypointBearing,
+                    destinationBearing  = viewModel.destinationBearing,
+                    nextWaypointBearing = viewModel.nextWaypointBearing,
                     modifier            = Modifier
                         .padding(horizontal = 16.dp)
                         .fillMaxWidth()

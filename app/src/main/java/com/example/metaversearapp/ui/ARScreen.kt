@@ -147,25 +147,15 @@ fun ARScreen(
 
     var roomAnchor by remember { mutableStateOf<Anchor?>(null) }
     var lastProcessingTime by remember { mutableLongStateOf(0L) }
-    var lastPathDropTime   by remember { mutableLongStateOf(0L) }
     var lastRerouteTime    by remember { mutableLongStateOf(0L) }
     val earthRef   = remember { mutableStateOf<Earth?>(null) }
     val sessionRef = remember { mutableStateOf<Session?>(null) }
     val resolvedAnchorIds = remember { mutableSetOf<String>() }
 
-    // --- DESTINATION PATH (room selector → A* arrows) ---
-    // destPathProgress is a local copy of the ViewModel path that shrinks as
-    // the user walks past each waypoint, advancing the visible arrow set.
-    var destPathProgress by remember { mutableStateOf<List<NavNode>>(emptyList()) }
     // Each entry pairs an ARCore anchor with its geographic position so individual
     // arrows can be detached by proximity rather than bulk-wiping the whole list.
     var destArrows by remember {
         mutableStateOf<List<Pair<Anchor, NavGraphPathfinder.ArrowPoint>>>(emptyList())
-    }
-
-    // Reset local progress whenever the ViewModel recomputes the path
-    LaunchedEffect(viewModel.destinationPathNodes) {
-        destPathProgress = viewModel.destinationPathNodes
     }
 
     // Re-trigger path computation the moment VPS locks (destination may have been
@@ -258,41 +248,52 @@ fun ARScreen(
         }
     }
 
-    // Full rebuild whenever the path, tracking state, or local AR reference changes.
-    // Individual arrow cleanup is handled per-proximity in onSessionUpdated.
+    // Full rebuild whenever the path, tracking state, calibration offsets, or local AR
+    // reference changes.  Individual arrow cleanup is handled per-proximity in onSessionUpdated.
     //
-    // earthRef.value is intentionally NOT a key: see the cloud-anchor LaunchedEffect
-    // above for a full explanation.  earthRef is read inside the body only.
-    LaunchedEffect(viewModel.destinationPathNodes, viewModel.earthTrackingState, viewModel.localArRef, sessionRef.value) {
-        val earth    = earthRef.value
-        val path     = viewModel.destinationPathNodes
-        val localRef = viewModel.localArRef
-        val session  = sessionRef.value
+    // earthRef.value is intentionally NOT a key: session.earth returns a new Java wrapper
+    // each ARCore frame, which would restart this effect 60×/s.  earthTrackingState +
+    // isCalibrated cover all the transitions we actually care about.
+    LaunchedEffect(
+        viewModel.destinationPathNodes,
+        viewModel.earthTrackingState,
+        viewModel.localArRef,
+        viewModel.isCalibrated,
+        viewModel.latOffset,
+        viewModel.lonOffset,
+        sessionRef.value
+    ) {
+        val currentPath = viewModel.destinationPathNodes
+        val localRef    = viewModel.localArRef
+        val session     = sessionRef.value
+        val earth       = earthRef.value
 
         destArrows.forEach { (anchor, _) -> anchor.detach() }
         destArrows = emptyList()
-        if (path.size < 2) return@LaunchedEffect
+        if (currentPath.size < 2 || session == null) return@LaunchedEffect
 
-        destArrows = if (localRef != null && session != null) {
-            NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
+        destArrows = if (localRef != null) {
+            NavGraphPathfinder.interpolateArrows(currentPath).mapNotNull { pt ->
                 createLocalArrowAnchor(session, localRef, pt.lat, pt.lon, pt.alt, pt.bearing)
                     ?.let { Pair(it, pt) }
             }
         } else {
             if (earth == null || earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
-            NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-                // Subtract headingOffset to convert true geographic bearing → VPS-EUS bearing.
-                // VPS-EUS "north" is rotated +headingOffset clockwise from true north, so an
-                // anchor at VPS bearing B appears at true bearing B + headingOffset.  To land
-                // at true bearing pt.bearing we must place it at pt.bearing - headingOffset.
-                // (localArRef path has the correction baked in via northX/northZ — no change needed there.)
+            // When not yet calibrated, estimate altOffset from the camera's current altitude
+            // so arrows appear at a reasonable height even before the first QR/anchor scan.
+            val effectiveAltOffset = if (viewModel.isCalibrated) {
+                viewModel.altOffset
+            } else {
+                earth.cameraGeospatialPose.altitude - currentPath.first().alt
+            }
+            NavGraphPathfinder.interpolateArrows(currentPath).mapNotNull { pt ->
                 val correctedBearing = pt.bearing - viewModel.headingOffset
                 val q = NavGraphPathfinder.bearingToQuaternion(correctedBearing)
                 try {
                     val anchor = earth.createAnchor(
                         pt.lat + viewModel.latOffset,
                         pt.lon + viewModel.lonOffset,
-                        pt.alt + viewModel.altOffset - 1.7,
+                        pt.alt + effectiveAltOffset - 1.7,
                         q[0], q[1], q[2], q[3]
                     )
                     Pair(anchor, pt)
@@ -333,26 +334,28 @@ fun ARScreen(
         val path     = viewModel.testPathNodes
         val localRef = viewModel.localArRef
         val session  = sessionRef.value
-        if (path.size < 2) return@LaunchedEffect
+        if (path.size < 2 || session == null) return@LaunchedEffect
 
-        testCrumbAnchors = if (localRef != null && session != null) {
+        testCrumbAnchors = if (localRef != null) {
             NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
                 createLocalArrowAnchor(session, localRef, pt.lat, pt.lon, pt.alt, pt.bearing)
             }
         } else {
             val earth = earthRef.value ?: return@LaunchedEffect
             if (earth.trackingState != TrackingState.TRACKING) return@LaunchedEffect
+            val effectiveAltOffset = if (viewModel.isCalibrated) {
+                viewModel.altOffset
+            } else {
+                earth.cameraGeospatialPose.altitude - path.first().alt
+            }
             NavGraphPathfinder.interpolateArrows(path).mapNotNull { pt ->
-                // Subtract headingOffset: VPS-EUS "north" is rotated +headingOffset
-                // clockwise from true north, so we need pt.bearing - headingOffset
-                // in VPS-frame to land at the correct true geographic bearing.
                 val correctedBearing = pt.bearing - viewModel.headingOffset
                 val q = NavGraphPathfinder.bearingToQuaternion(correctedBearing)
                 try {
                     earth.createAnchor(
                         pt.lat + viewModel.latOffset,
                         pt.lon + viewModel.lonOffset,
-                        pt.alt + viewModel.altOffset - 1.7,
+                        pt.alt + effectiveAltOffset - 1.7,
                         q[0], q[1], q[2], q[3]
                     )
                 } catch (_: Exception) { null }
@@ -442,37 +445,14 @@ fun ARScreen(
                         if (earth != null && earth.trackingState == TrackingState.TRACKING) {
                             val pose = earth.cameraGeospatialPose
 
-                            val now    = System.currentTimeMillis()
+                            val now     = System.currentTimeMillis()
                             val userLat = pose.latitude  - viewModel.latOffset
                             val userLon = pose.longitude - viewModel.lonOffset
 
-                            // ── Advance nav-node path for HUD bearing + arrival check ──
-                            // Throttled to once per 800 ms so we never drop more than one
-                            // node per frame and accidentally trigger a full anchor rebuild.
-                            if (destPathProgress.size > 1 && (now - lastPathDropTime) > 800L) {
-                                val nextNode = destPathProgress[1]
-                                val dist = NavGraphPathfinder.haversine(
-                                    userLat, userLon, nextNode.lat, nextNode.lon
-                                )
-                                if (dist < 3.0) {
-                                    destPathProgress = destPathProgress.drop(1)
-                                    lastPathDropTime = now
-                                }
-                            }
-
                             // ── Per-arrow proximity pruning ────────────────────────────
-                            // Detach the single nearest arrow within 2.5 m so arrows
-                            // disappear one at a time as the user walks through them.
-                            //
-                            // THREADING NOTE: onSessionUpdated runs on the GL thread.
-                            // destArrows is also mutated by the main-thread arrow-rebuild
-                            // LaunchedEffect.  To prevent a race:
-                            //  1. Take a snapshot of the list on the GL thread.
-                            //  2. Detach the anchor immediately (safe on GL thread).
-                            //  3. Dispatch the list mutation to the main thread via
-                            //     scope.launch, removing by object reference rather than
-                            //     index so a concurrent rebuild never causes an
-                            //     IndexOutOfBoundsException or stale removal.
+                            // Snapshot on the GL thread; dispatch list mutation to main
+                            // thread via scope.launch to avoid races with the arrow-rebuild
+                            // LaunchedEffect (which also writes destArrows on the main thread).
                             val arrowsSnapshot = destArrows
                             if (arrowsSnapshot.isNotEmpty()) {
                                 val closest = arrowsSnapshot.indexOfFirst { (_, pt) ->
@@ -481,46 +461,20 @@ fun ARScreen(
                                 if (closest >= 0) {
                                     val pairToRemove = arrowsSnapshot[closest]
                                     pairToRemove.first.detach()
-                                    scope.launch {   // → main thread
-                                        // Filter by reference: safe even if a rebuild has
-                                        // already replaced the list with new Pair objects.
+                                    scope.launch {
                                         destArrows = destArrows.filter { it !== pairToRemove }
                                     }
                                 }
                             }
 
-                            // Arrival check — fire once when the user is within 3 m of
-                            // the final destination node and the banner isn't already showing.
-                            if (!viewModel.showArrivalBanner &&
-                                destPathProgress.size == 1 &&
-                                viewModel.selectedDestination != null
-                            ) {
-                                val finalNode = destPathProgress[0]
-                                val dist = NavGraphPathfinder.haversine(
-                                    pose.latitude  - viewModel.latOffset,
-                                    pose.longitude - viewModel.lonOffset,
-                                    finalNode.lat, finalNode.lon
-                                )
-                                if (dist < 3.0) {
-                                    viewModel.onArrived(viewModel.selectedDestination!!.name)
-                                    destPathProgress = emptyList()
-                                }
-                            }
-
-                            // ── Off-path re-routing ──────────────────────────────
-                            // If the user is more than 8 m from every remaining
-                            // waypoint, they've gone off-route.  Recalculate A*
-                            // from their current corrected position.
-                            // 10 s cooldown prevents hammering the pathfinder while
-                            // the user is turning around or GPS is briefly noisy.
-                            // Guard: skip when near arrival (size == 1) to avoid
-                            // re-routing right as the destination comes into view.
+                            // ── Off-path re-routing ──────────────────────────────────────
+                            // 10 s cooldown; skip when near arrival (size == 1).
                             if (viewModel.selectedDestination != null &&
                                 !viewModel.showArrivalBanner &&
-                                destPathProgress.size > 1 &&
+                                viewModel.currentPathProgress.size > 1 &&
                                 (now - lastRerouteTime) > 10_000L
                             ) {
-                                val minDist = destPathProgress.minOf { node ->
+                                val minDist = viewModel.currentPathProgress.minOf { node ->
                                     NavGraphPathfinder.haversine(userLat, userLon, node.lat, node.lon)
                                 }
                                 if (minDist > 8.0) {
@@ -666,55 +620,57 @@ fun ARScreen(
                     //   Medium:    Z   0.25 →  0.35   (10 cm, 22 cm wide)
                     //   Tip:       Z   0.35 →  0.45   (10 cm,  8 cm wide)
                     testCrumbAnchors.forEach { anchor ->
-                        AnchorNode(anchor = anchor) {
-                            CubeNode(
-                                size   = Float3(0.08f, 0.20f, 0.40f),
-                                center = Position(0f, 0.10f, -0.05f),
-                                materialInstance = cyanWaypointMaterial
-                            )
-                            CubeNode(
-                                size   = Float3(0.35f, 0.20f, 0.10f),
-                                center = Position(0f, 0.10f, 0.20f),
-                                materialInstance = cyanWaypointMaterial
-                            )
-                            CubeNode(
-                                size   = Float3(0.22f, 0.20f, 0.10f),
-                                center = Position(0f, 0.10f, 0.30f),
-                                materialInstance = cyanWaypointMaterial
-                            )
-                            CubeNode(
-                                size   = Float3(0.08f, 0.20f, 0.10f),
-                                center = Position(0f, 0.10f, 0.40f),
-                                materialInstance = cyanWaypointMaterial
-                            )
+                        key(anchor) {
+                            AnchorNode(anchor = anchor) {
+                                CubeNode(
+                                    size   = Float3(0.08f, 0.20f, 0.40f),
+                                    center = Position(0f, 0.10f, -0.05f),
+                                    materialInstance = cyanWaypointMaterial
+                                )
+                                CubeNode(
+                                    size   = Float3(0.35f, 0.20f, 0.10f),
+                                    center = Position(0f, 0.10f, 0.20f),
+                                    materialInstance = cyanWaypointMaterial
+                                )
+                                CubeNode(
+                                    size   = Float3(0.22f, 0.20f, 0.10f),
+                                    center = Position(0f, 0.10f, 0.30f),
+                                    materialInstance = cyanWaypointMaterial
+                                )
+                                CubeNode(
+                                    size   = Float3(0.08f, 0.20f, 0.10f),
+                                    center = Position(0f, 0.10f, 0.40f),
+                                    materialInstance = cyanWaypointMaterial
+                                )
+                            }
                         }
                     }
 
                     // ── Room-destination path arrows (amber) ─────────────────────
-                    // Same stepped "▶" shape; amber distinguishes destination-nav
-                    // from test-pin arrows (cyan).
                     destArrows.forEach { (anchor, _) ->
-                        AnchorNode(anchor = anchor) {
-                            CubeNode(
-                                size   = Float3(0.08f, 0.20f, 0.40f),
-                                center = Position(0f, 0.10f, -0.05f),
-                                materialInstance = amberDestMaterial
-                            )
-                            CubeNode(
-                                size   = Float3(0.35f, 0.20f, 0.10f),
-                                center = Position(0f, 0.10f, 0.20f),
-                                materialInstance = amberDestMaterial
-                            )
-                            CubeNode(
-                                size   = Float3(0.22f, 0.20f, 0.10f),
-                                center = Position(0f, 0.10f, 0.30f),
-                                materialInstance = amberDestMaterial
-                            )
-                            CubeNode(
-                                size   = Float3(0.08f, 0.20f, 0.10f),
-                                center = Position(0f, 0.10f, 0.40f),
-                                materialInstance = amberDestMaterial
-                            )
+                        key(anchor) {
+                            AnchorNode(anchor = anchor) {
+                                CubeNode(
+                                    size   = Float3(0.08f, 0.20f, 0.40f),
+                                    center = Position(0f, 0.10f, -0.05f),
+                                    materialInstance = amberDestMaterial
+                                )
+                                CubeNode(
+                                    size   = Float3(0.35f, 0.20f, 0.10f),
+                                    center = Position(0f, 0.10f, 0.20f),
+                                    materialInstance = amberDestMaterial
+                                )
+                                CubeNode(
+                                    size   = Float3(0.22f, 0.20f, 0.10f),
+                                    center = Position(0f, 0.10f, 0.30f),
+                                    materialInstance = amberDestMaterial
+                                )
+                                CubeNode(
+                                    size   = Float3(0.08f, 0.20f, 0.10f),
+                                    center = Position(0f, 0.10f, 0.40f),
+                                    materialInstance = amberDestMaterial
+                                )
+                            }
                         }
                     }
                 }
@@ -730,24 +686,11 @@ fun ARScreen(
             }
 
             // --- LAYER 2: UI OVERLAYS ---
-            val nextWaypointBearing: Double? = if (destPathProgress.size >= 2) {
-                viewModel.geospatialPose?.let { pose ->
-                    val next = destPathProgress[1]
-                    val dLon = Math.toRadians(next.lon + viewModel.lonOffset - pose.longitude)
-                    val lat1 = Math.toRadians(pose.latitude)
-                    val lat2 = Math.toRadians(next.lat + viewModel.latOffset)
-                    val y    = sin(dLon) * cos(lat2)
-                    val x    = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(dLon)
-                    (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
-                }
-            } else null
-
             ARUiOverlay(
-                viewModel            = viewModel,
-                showDebug            = showDebug,
-                remainingWaypoints   = if (destPathProgress.size > 1) destPathProgress.size - 1 else 0,
-                nextWaypointBearing  = nextWaypointBearing,
-                remainingPath        = destPathProgress
+                viewModel           = viewModel,
+                showDebug           = showDebug,
+                remainingWaypoints  = if (viewModel.currentPathProgress.size > 1) viewModel.currentPathProgress.size - 1 else 0,
+                remainingPath       = viewModel.currentPathProgress
             )
 
             // Debug + Admin buttons — bottom-right, above the control card

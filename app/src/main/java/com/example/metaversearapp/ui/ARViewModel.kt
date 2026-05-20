@@ -113,6 +113,9 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var headingAccuracy by mutableDoubleStateOf(0.0)
         private set
 
+    private var lastStateUpdateTime = 0L
+    private var lastPathDropTime    = 0L
+
     // Local AR reference — established at each QR scan.
     // Enables anchor placement using ARCore's local tracking (cm-accurate)
     // instead of VPS, which is unreliable indoors.
@@ -156,6 +159,30 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
      * tracking locks (in case the destination was selected before lock).
      */
     var destinationPathNodes by mutableStateOf<List<NavNode>>(emptyList())
+        private set
+
+    /**
+     * A shrinking copy of [destinationPathNodes] that advances as the user walks.
+     * Used for HUD bearing, arrival detection, floor-change warnings, and rerouting.
+     * Kept in the ViewModel so path-drop logic runs in [updateGeospatialState] rather
+     * than on the ARCore GL thread inside ARScreen.
+     */
+    var currentPathProgress by mutableStateOf<List<NavNode>>(emptyList())
+        private set
+
+    /** Bearing (0–360°) from the user to the next waypoint, updated at ~10 Hz. */
+    var nextWaypointBearing by mutableStateOf<Double?>(null)
+        private set
+
+    /** Bearing (0–360°) from the user to the final destination, updated at ~10 Hz. */
+    var destinationBearing by mutableStateOf<Double?>(null)
+        private set
+
+    /**
+     * Floor label of the nearest nav node to the user's corrected position,
+     * updated at ~10 Hz.  Null until the first geospatial fix after calibration.
+     */
+    var currentFloor by mutableStateOf<String?>(null)
         private set
 
     // ── Nav graph snapshot exposed for the minimap ───────────────────────────
@@ -279,6 +306,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             if (startNode != null && endNode != null) {
                 val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
                 destinationPathNodes = path
+                currentPathProgress  = path
                 if (path.isNotEmpty()) {
                     statusText = "Route to ${dest.name}: ${path.size} waypoints"
                 } else {
@@ -564,22 +592,91 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     fun updateGeospatialState(earth: Earth?) {
         if (earth != null) {
             isEarthObjectNull = false
-            earthState = earth.earthState
+            val oldTrackingState = earthTrackingState
+            earthState         = earth.earthState
             earthTrackingState = earth.trackingState
+
             if (earthTrackingState == TrackingState.TRACKING) {
                 val pose = earth.cameraGeospatialPose
-                geospatialPose = pose
-                horizontalAccuracy = pose.horizontalAccuracy
-                verticalAccuracy = pose.verticalAccuracy
-                headingAccuracy = pose.headingAccuracy.toDouble()
+
+                // Throttle Compose state writes to ~10 Hz to prevent 60 fps recomposition lag.
+                val now = System.currentTimeMillis()
+                if (now - lastStateUpdateTime > 100L || oldTrackingState != TrackingState.TRACKING) {
+                    geospatialPose     = pose
+                    horizontalAccuracy = pose.horizontalAccuracy
+                    verticalAccuracy   = pose.verticalAccuracy
+                    headingAccuracy    = pose.headingAccuracy.toDouble()
+
+                    updateBearings(pose)
+
+                    // Advance path progress (throttled to 800 ms to drop at most one node per tick)
+                    if (currentPathProgress.size > 1 && (now - lastPathDropTime) > 800L) {
+                        val nextNode = currentPathProgress[1]
+                        val dist = NavGraphPathfinder.haversine(
+                            pose.latitude  - latOffset,
+                            pose.longitude - lonOffset,
+                            nextNode.lat, nextNode.lon
+                        )
+                        if (dist < 3.0) {
+                            currentPathProgress = currentPathProgress.drop(1)
+                            lastPathDropTime    = now
+                        }
+                    }
+
+                    // Arrival check
+                    if (!showArrivalBanner &&
+                        currentPathProgress.size == 1 &&
+                        selectedDestination != null
+                    ) {
+                        val finalNode = currentPathProgress[0]
+                        val dist = NavGraphPathfinder.haversine(
+                            pose.latitude  - latOffset,
+                            pose.longitude - lonOffset,
+                            finalNode.lat, finalNode.lon
+                        )
+                        if (dist < 3.0) {
+                            onArrived(selectedDestination!!.name)
+                            currentPathProgress = emptyList()
+                        }
+                    }
+
+                    lastStateUpdateTime = now
+                }
             } else {
                 geospatialPose = null
             }
         } else {
-            isEarthObjectNull = true
+            isEarthObjectNull  = true
             earthTrackingState = TrackingState.STOPPED
-            geospatialPose = null
+            geospatialPose     = null
         }
+    }
+
+    private fun updateBearings(pose: GeospatialPose) {
+        val corrLat = pose.latitude  - latOffset
+        val corrLon = pose.longitude - lonOffset
+
+        destinationBearing = selectedDestination?.let { dest ->
+            calculateBearing(pose.latitude, pose.longitude, dest.lat + latOffset, dest.lon + lonOffset)
+        }
+        nextWaypointBearing = if (currentPathProgress.size >= 2) {
+            val next = currentPathProgress[1]
+            calculateBearing(pose.latitude, pose.longitude, next.lat + latOffset, next.lon + lonOffset)
+        } else null
+
+        // Nearest nav node → floor label (only when we have nodes and a corrected position)
+        if (navNodes.isNotEmpty() && isCalibrated) {
+            currentFloor = NavGraphPathfinder.nearestNode(navNodes, corrLat, corrLon)?.floor
+        }
+    }
+
+    private fun calculateBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val dLon  = Math.toRadians(lon2 - lon1)
+        val rLat1 = Math.toRadians(lat1)
+        val rLat2 = Math.toRadians(lat2)
+        val y = sin(dLon) * cos(rLat2)
+        val x = cos(rLat1) * sin(rLat2) - sin(rLat1) * cos(rLat2) * cos(dLon)
+        return (Math.toDegrees(kotlin.math.atan2(y, x)) + 360.0) % 360.0
     }
 
     /**
