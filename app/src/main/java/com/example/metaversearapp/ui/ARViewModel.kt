@@ -207,6 +207,44 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         viewModelScope.launch {
             navNodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
             navEdges = withContext(Dispatchers.IO) { db.navDao().getAllEdges() }
+            mergeNavDoorNodes()
+        }
+    }
+
+    /**
+     * Synthesises [QrLocation] entries for every DOOR node that has both a
+     * [NavNode.label] (room name) and an [NavNode.anchorQrId] (room ID), then
+     * merges them into [allLocations].
+     *
+     * This means doors placed in the navgraph editor appear in the destination
+     * picker even before the QR JSON has been uploaded to the Gist — no extra
+     * step required.  Rooms already present in the QR JSON take precedence:
+     * they carry extra metadata (building, facingDeg) that the navgraph editor
+     * can't capture, so we never overwrite them.
+     *
+     * Safe to call multiple times — the merge is additive and idempotent.
+     */
+    private fun mergeNavDoorNodes() {
+        if (navNodes.isEmpty()) return
+        val existingIds = allLocations.map { it.qrID }.toSet()
+        val synthetic = navNodes
+            .filter { it.type == NodeType.DOOR && it.anchorQrId != null && it.label.isNotBlank() }
+            .filter { it.anchorQrId !in existingIds }
+            .map { node ->
+                QrLocation(
+                    qrID      = node.anchorQrId!!,
+                    name      = node.label,
+                    building  = "",
+                    floor     = node.floor,
+                    lat       = node.lat,
+                    lon       = node.lon,
+                    alt       = node.alt,
+                    direction = "Unknown",
+                    facingDeg = null
+                )
+            }
+        if (synthetic.isNotEmpty()) {
+            allLocations = allLocations + synthetic
         }
     }
 
@@ -241,6 +279,10 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 statusText = "Sync Failed: ${e.localizedMessage}"
                 allLocations = withContext(Dispatchers.IO) { db.qrDao().getAll() }
             }
+            // Merge any door nodes recorded in the navgraph that aren't in the
+            // QR JSON yet — lets admins use the navgraph editor without having
+            // to also maintain the QR Gist for every new room.
+            mergeNavDoorNodes()
         }
     }
 
@@ -315,9 +357,13 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
 
             if (startNode != null && endNode != null) {
                 val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
-                destinationPathNodes = path
-                currentPathProgress  = path
                 if (path.isNotEmpty()) {
+                    // Only replace the current path when A* finds a valid route.
+                    // Never clear destinationPathNodes with an empty result — that
+                    // would wipe all visible arrows (e.g. after a cloud anchor
+                    // calibration re-routes through a temporarily disconnected node).
+                    destinationPathNodes = path
+                    currentPathProgress  = path
                     statusText = "Route to ${dest.name}: ${path.size} waypoints"
                 } else {
                     statusText = "No path to ${dest.name} — check nav graph coverage"
@@ -738,7 +784,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     ) {
         latOffset = geoPose.latitude  - refLat
         lonOffset = geoPose.longitude - refLon
-        altOffset = geoPose.altitude
+        altOffset = geoPose.altitude - refAlt
 
         // Heading correction (kept for the earth-anchor fallback path)
         val hdgDelta: Double? = if (storedHeading != null) {
