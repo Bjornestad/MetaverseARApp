@@ -7,8 +7,8 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [QrLocation::class, NavNode::class, NavEdge::class, FloorAltitude::class],
-    version = 9,
+    entities = [QrLocation::class, NavNode::class, NavEdge::class, FloorAltitude::class, NavWall::class],
+    version = 10,
     exportSchema = false
 )
 @TypeConverters(NodeTypeConverter::class)
@@ -16,6 +16,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun qrDao(): QrDao
     abstract fun navDao(): NavDao
     abstract fun floorAltDao(): FloorAltDao
+    abstract fun navWallDao(): NavWallDao
 }
 
 /**
@@ -89,6 +90,7 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
  *    Existing single-floor rows are migrated with building = "".
  */
 val MIGRATION_8_9 = object : Migration(8, 9) {
+
     override fun migrate(database: SupportSQLiteDatabase) {
         // Add building column to nav_nodes
         database.execSQL(
@@ -109,5 +111,26 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
         )
         database.execSQL("DROP TABLE floor_altitudes")
         database.execSQL("ALTER TABLE floor_altitudes_new RENAME TO floor_altitudes")
+    }
+}
+
+/**
+ * Adds the [NavWall] table for wall segments that prohibit pathfinding through them.
+ * Existing databases have no walls — the table starts empty and walls are added
+ * via the navgraph-viewer tool then synced via Gist.
+ */
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        database.execSQL(
+            "CREATE TABLE IF NOT EXISTS nav_walls (" +
+            "id TEXT NOT NULL PRIMARY KEY, " +
+            "building TEXT NOT NULL DEFAULT '', " +
+            "floor TEXT NOT NULL, " +
+            "lat1 REAL NOT NULL, " +
+            "lon1 REAL NOT NULL, " +
+            "lat2 REAL NOT NULL, " +
+            "lon2 REAL NOT NULL, " +
+            "label TEXT NOT NULL DEFAULT '')"
+        )
     }
 }

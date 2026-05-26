@@ -9,6 +9,7 @@ import com.example.metaversearapp.data.NavEdge
 import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
+import com.example.metaversearapp.data.NavWall
 import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
 import com.example.metaversearapp.data.Room
@@ -196,10 +197,14 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var navEdges by mutableStateOf<List<NavEdge>>(emptyList())
         private set
 
+    /** Wall segments loaded from DB; passed to every A* call to block cross-wall shortcuts. */
+    private var navWalls: List<NavWall> = emptyList()
+
     private fun loadNavData() {
         viewModelScope.launch {
             navNodes = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
             navEdges = withContext(Dispatchers.IO) { db.navDao().getAllEdges() }
+            navWalls = withContext(Dispatchers.IO) { db.navWallDao().getAll() }
             mergeNavDoorNodes()
         }
     }
@@ -294,6 +299,13 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                         // upsert never deletes rows, so edges referencing nodes
                         // that were removed from the Gist accumulate otherwise.
                         db.navDao().pruneOrphanEdges()
+                        // Walls replace the local set entirely — the Gist is the
+                        // only place they can be created, so local-only walls
+                        // don't exist and a full replace is always safe.
+                        if (export.walls.isNotEmpty()) {
+                            db.navWallDao().clearAll()
+                            db.navWallDao().upsertAll(export.walls)
+                        }
                     }
                 }
                 // Failures are silently ignored (token not set, no network, empty gist, etc.)
@@ -342,7 +354,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 ?: NavGraphPathfinder.nearestNode(nodes, dest.lat, dest.lon)
 
             if (startNode != null && endNode != null) {
-                val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
+                val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id, navWalls)
                 if (path.isNotEmpty()) {
                     // Only replace the current path when A* finds a valid route.
                     // Never clear destinationPathNodes with an empty result — that
@@ -599,7 +611,7 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                         return@launch
                     }
 
-                    val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id)
+                    val path = NavGraphPathfinder.aStar(nodes, edges, startNode.id, endNode.id, navWalls)
                     testPathNodes = path
                     statusText = when {
                         path.isEmpty() -> "No path found — graph may be disconnected here"

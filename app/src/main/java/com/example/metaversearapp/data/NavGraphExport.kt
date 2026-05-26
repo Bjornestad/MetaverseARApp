@@ -13,5 +13,12 @@ data class NavGraphExport(
      * Gists uploaded before the building field was introduced will have an empty
      * list here; the app will re-derive altitudes from node medians on first load.
      */
-    val floorAltitudes: List<FloorAltitude> = emptyList()
+    val floorAltitudes: List<FloorAltitude> = emptyList(),
+    /**
+     * Wall segments that block pathfinding.
+     * Any edge whose straight-line geometry crosses a wall on the same floor is
+     * dropped from the A* adjacency list (unless one endpoint is a DOOR node).
+     * Older Gist files without this field deserialise to an empty list.
+     */
+    val walls: List<NavWall> = emptyList()
 )

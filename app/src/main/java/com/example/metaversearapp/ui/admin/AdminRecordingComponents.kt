@@ -41,9 +41,12 @@ internal fun RecordingTopHud(
     geospatialPose:     GeospatialPose?,
     earthTrackingState: TrackingState,
 ) {
+    val hAcc = geospatialPose?.horizontalAccuracy ?: Double.MAX_VALUE
     val vpsColor = when {
-        earthTrackingState == TrackingState.TRACKING -> Color(0xFF4CAF50)
-        else                                          -> Color(0xFFFF5252)
+        earthTrackingState != TrackingState.TRACKING -> Color(0xFFFF5252)
+        hAcc <= 1.0                                  -> Color(0xFF4CAF50)   // green — good
+        hAcc <= 3.0                                  -> Color(0xFFFFA726)   // amber — marginal
+        else                                         -> Color(0xFFFF5252)   // red — poor
     }
 
     Card(
@@ -125,6 +128,27 @@ internal fun RecordingTopHud(
                         color = gpsColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
                     )
                 }
+                // Row 3: Precision (colour-coded by quality)
+                val hAccVal = geospatialPose.horizontalAccuracy
+                val vAccVal = geospatialPose.verticalAccuracy
+                val precColor = when {
+                    hAccVal <= 1.0 -> Color(0xFF4CAF50)
+                    hAccVal <= 3.0 -> Color(0xFFFFA726)
+                    else           -> Color(0xFFFF5252)
+                }
+                Row(
+                    modifier              = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        String.format(Locale.US, "hAcc ±%.2fm", hAccVal),
+                        color = precColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    )
+                    Text(
+                        String.format(Locale.US, "vAcc ±%.2fm", vAccVal),
+                        color = precColor, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    )
+                }
             }
         }
     }
@@ -142,6 +166,8 @@ internal fun RecordingControlsPanel(
     onBuildingChange:  (String) -> Unit,
     currentFloor:      String,
     onFloorChange:     (String) -> Unit,
+    capturePrecisionM: Double,
+    onPrecisionChange: (Double) -> Unit,
     lastRecordedNode:  NavNode?,
     lastNodeType:      NodeType,
     onMarkAs:          (NodeType) -> Unit,
@@ -156,7 +182,14 @@ internal fun RecordingControlsPanel(
         modifier            = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        BuildingFloorSelectorCard(currentBuilding, onBuildingChange, currentFloor, onFloorChange)
+        BuildingFloorSelectorCard(
+            currentBuilding   = currentBuilding,
+            onBuildingChange  = onBuildingChange,
+            currentFloor      = currentFloor,
+            onFloorChange     = onFloorChange,
+            capturePrecisionM = capturePrecisionM,
+            onPrecisionChange = onPrecisionChange,
+        )
         MarkWaypointCard(lastRecordedNode, lastNodeType, onMarkAs)
         RecordingActionBar(
             isRecording       = isRecording,
@@ -169,13 +202,17 @@ internal fun RecordingControlsPanel(
     }
 }
 
-/** Compact single-row floor selector. */
+private val PRECISION_OPTIONS = listOf(1.0, 2.0, 3.0, 5.0)   // metres
+
+/** Building name field + floor chips + VPS precision gate selector. */
 @Composable
 private fun BuildingFloorSelectorCard(
     currentBuilding:  String,
     onBuildingChange: (String) -> Unit,
     currentFloor:     String,
     onFloorChange:    (String) -> Unit,
+    capturePrecisionM: Double,
+    onPrecisionChange: (Double) -> Unit,
 ) {
     Card(
         colors   = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
@@ -240,6 +277,51 @@ private fun BuildingFloorSelectorCard(
                         }
                     }
                 }
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            // ── Precision gate chips ─────────────────────────────────────────
+            // Controls the maximum allowed hAcc before a node is captured.
+            // 1–2 m = tight (good outdoor VPS); 3–5 m = relaxed (indoor/basement).
+            Row(
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier              = Modifier.fillMaxWidth()
+            ) {
+                Text("Gate", color = Color.Gray, fontSize = 11.sp, modifier = Modifier.width(52.dp))
+                PRECISION_OPTIONS.forEach { threshold ->
+                    val selected  = capturePrecisionM == threshold
+                    val chipColor = when {
+                        threshold <= 1.0 -> Color(0xFF4CAF50)   // green
+                        threshold <= 3.0 -> Color(0xFFFFA726)   // amber
+                        else             -> Color(0xFFFF5252)   // red
+                    }
+                    Surface(
+                        onClick  = { onPrecisionChange(threshold) },
+                        shape    = RoundedCornerShape(6.dp),
+                        color    = if (selected) chipColor else Color.White.copy(alpha = 0.08f),
+                        modifier = Modifier
+                            .size(width = 36.dp, height = 26.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                "${threshold.toInt()}m",
+                                fontSize   = 10.sp,
+                                color      = if (selected) Color.Black else chipColor.copy(alpha = 0.8f),
+                                fontFamily = FontFamily.Monospace,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "max hAcc",
+                    color    = Color.Gray.copy(alpha = 0.5f),
+                    fontSize = 9.sp,
+                    fontFamily = FontFamily.Monospace
+                )
             }
         }
     }

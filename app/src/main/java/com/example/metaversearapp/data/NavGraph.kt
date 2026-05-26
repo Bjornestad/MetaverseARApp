@@ -147,30 +147,57 @@ object NavGraphPathfinder {
      * accidental cross-floor shortcuts caused by GPS/VPS altitude drift or
      * manually mis-wired edges, while still allowing legitimate staircase paths.
      *
+     * **Wall guard**: any edge that crosses a [NavWall] segment on the same floor
+     * is silently dropped, **unless** at least one endpoint is a [NodeType.DOOR]
+     * node — door nodes represent the authorised crossing point at the wall.
+     *
+     * @param walls  Wall segments to enforce.  Pass an empty list (the default)
+     *               to disable wall enforcement (no overhead if list is empty).
+     *
      * @return Ordered list of [NavNode]s from start to goal, or empty if no path exists.
      */
     fun aStar(
         nodes: List<NavNode>,
         edges: List<NavEdge>,
         startId: String,
-        goalId: String
+        goalId: String,
+        walls: List<NavWall> = emptyList()
     ): List<NavNode> {
         if (startId == goalId) return listOfNotNull(nodes.find { it.id == startId })
 
         val nodeMap = nodes.associateBy { it.id }
         val goal    = nodeMap[goalId] ?: return emptyList()
 
+        // Pre-group walls by floor to avoid iterating all walls for every edge.
+        val wallsByFloor: Map<String, List<NavWall>> =
+            if (walls.isEmpty()) emptyMap() else walls.groupBy { it.floor }
+
         // Build undirected adjacency list: nodeId -> [(neighborId, weight)]
-        // Cross-floor edges that don't pass through a stair node are dropped here
-        // so they can never be traversed, regardless of how they ended up in the DB.
+        // Both the floor-jump guard and the wall guard can drop edges here.
         val adj = HashMap<String, MutableList<Pair<String, Double>>>(nodes.size * 2)
         for (e in edges) {
             val a = nodeMap[e.fromId] ?: continue
             val b = nodeMap[e.toId]   ?: continue
+
+            // ── Floor-jump guard ──────────────────────────────────────────────
             if (abs(a.alt - b.alt) > MAX_FLOOR_JUMP_ALT_M &&
                 a.type !in STAIR_TYPES && b.type !in STAIR_TYPES) {
-                continue   // floor-jump guard: skip this edge entirely
+                continue   // accidental cross-floor shortcut — skip
             }
+
+            // ── Wall guard ────────────────────────────────────────────────────
+            // Door nodes are exempt: they ARE the authorised crossing in the wall.
+            // Only check non-door, same-floor edges.
+            if (wallsByFloor.isNotEmpty() &&
+                a.type != NodeType.DOOR && b.type != NodeType.DOOR &&
+                a.floor == b.floor) {
+                val floorWalls = wallsByFloor[a.floor]
+                if (floorWalls != null && floorWalls.any { w ->
+                    segmentsIntersect(a.lat, a.lon, b.lat, b.lon,
+                                      w.lat1, w.lon1, w.lat2, w.lon2)
+                }) continue   // edge crosses a wall — block it
+            }
+
             adj.getOrPut(e.fromId) { mutableListOf() } += e.toId   to e.weight
             adj.getOrPut(e.toId)   { mutableListOf() } += e.fromId to e.weight
         }
@@ -220,6 +247,28 @@ object NavGraphPathfinder {
     )
 
     // ── Private helpers ───────────────────────────────────────────────────────
+
+    /**
+     * Returns true if segment AB (from [ax],[ay] to [bx],[by]) intersects segment
+     * CD (from [cx],[cy] to [dx],[dy]) using the standard cross-product test.
+     *
+     * Lat/lon are treated as flat 2-D coordinates — fine for short indoor distances
+     * (< 500 m) where projection distortion is negligible.
+     *
+     * **Strict inequalities** are used so that segments which merely share an
+     * endpoint or are collinear do NOT count as intersecting.  This prevents
+     * door-node edges (which terminate exactly at a wall) from being blocked.
+     */
+    private fun segmentsIntersect(
+        ax: Double, ay: Double, bx: Double, by: Double,
+        cx: Double, cy: Double, dx: Double, dy: Double
+    ): Boolean {
+        val denom = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx)
+        if (abs(denom) < 1e-12) return false   // parallel or collinear
+        val t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / denom
+        val u = ((cx - ax) * (by - ay) - (cy - ay) * (bx - ax)) / denom
+        return t > 0.0 && t < 1.0 && u > 0.0 && u < 1.0
+    }
 
     /**
      * Admissible heuristic: 3-D straight-line distance to the goal.

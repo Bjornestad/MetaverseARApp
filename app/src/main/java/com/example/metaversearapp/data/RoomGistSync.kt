@@ -16,16 +16,18 @@ import kotlinx.serialization.json.Json
 private const val GIST_API_BASE  = "https://api.github.com/gists"
 private const val ROOMS_FILENAME = "rooms.json"
 
-// ── GitHub Gist API data models (shared shape with NavGistSync) ───────────────
+// ── GitHub Gist API data models ───────────────────────────────────────────────
+// Prefixed with "Rooms" to avoid JVM-level name collision with the identically
+// shaped private classes in NavGistSync.kt (same package → same JVM namespace).
 
 @Serializable
-private data class GistResponse(
+private data class RoomsGistResponse(
     val id: String? = null,
-    val files: Map<String, GistFile> = emptyMap()
+    val files: Map<String, RoomsGistFile> = emptyMap()
 )
 
 @Serializable
-private data class GistFile(
+private data class RoomsGistFile(
     val filename: String? = null,
     val content: String? = null,
     @SerialName("raw_url") val rawUrl: String? = null,
@@ -33,10 +35,10 @@ private data class GistFile(
 )
 
 @Serializable
-private data class GistPatchRequest(val files: Map<String, GistFileContent>)
+private data class RoomsGistPatchRequest(val files: Map<String, RoomsGistFileContent>)
 
 @Serializable
-private data class GistFileContent(val content: String)
+private data class RoomsGistFileContent(val content: String)
 
 // ── Sync object ───────────────────────────────────────────────────────────────
 
@@ -82,7 +84,7 @@ object RoomGistSync {
             val client = buildClient()
             val token  = BuildConfig.GITHUB_TOKEN
 
-            val gist: GistResponse = client.get("$GIST_API_BASE/$gistId") {
+            val gist: RoomsGistResponse = client.get("$GIST_API_BASE/$gistId") {
                 header(HttpHeaders.Accept,     "application/vnd.github+json")
                 header("X-GitHub-Api-Version", "2022-11-28")
                 if (token.isNotBlank()) header(HttpHeaders.Authorization, "Bearer $token")
@@ -127,7 +129,7 @@ object RoomGistSync {
         }
 
         val payload = json.encodeToString(rooms)
-        val body    = GistPatchRequest(mapOf(ROOMS_FILENAME to GistFileContent(payload)))
+        val body    = RoomsGistPatchRequest(mapOf(ROOMS_FILENAME to RoomsGistFileContent(payload)))
 
         return try {
             val client   = buildClient()

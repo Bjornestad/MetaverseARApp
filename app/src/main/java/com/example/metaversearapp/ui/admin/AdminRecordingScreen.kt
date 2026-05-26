@@ -93,13 +93,17 @@ internal fun AdminRecordingScreen(
     var earthTrackingState by remember { mutableStateOf(TrackingState.STOPPED) }
 
     // ── Recording state ────────────────────────────────────────────────────────
-    var isRecording      by remember { mutableStateOf(false) }
-    var sessionNodes     by remember { mutableIntStateOf(0) }
-    var sessionEdges     by remember { mutableIntStateOf(0) }
-    var lastRecordedNode by remember { mutableStateOf<NavNode?>(null) }
-    var lastCaptureTime  by remember { mutableLongStateOf(0L) }
-    var statusMsg        by remember { mutableStateOf("Tap ▶ to record") }
-    var lastNodeType     by remember { mutableStateOf(NodeType.WAYPOINT) }
+    var isRecording           by remember { mutableStateOf(false) }
+    var sessionNodes          by remember { mutableIntStateOf(0) }
+    var sessionEdges          by remember { mutableIntStateOf(0) }
+    var lastRecordedNode      by remember { mutableStateOf<NavNode?>(null) }
+    var lastCaptureTime       by remember { mutableLongStateOf(0L) }
+    var statusMsg             by remember { mutableStateOf("Tap ▶ to record") }
+    var lastNodeType          by remember { mutableStateOf(NodeType.WAYPOINT) }
+    // Admin-configurable VPS precision gate — only nodes recorded below this
+    // horizontal accuracy (metres) are accepted.  Persisted across screen
+    // recompositions but not across app restarts (reset to default on fresh launch).
+    var capturePrecisionM     by remember { mutableStateOf(MAX_CAPTURE_PRECISION_M) }
 
     // Canonical altitude for the current floor — the median of every existing
     // node on this floor.  All new nodes use this value instead of raw GPS
@@ -434,6 +438,17 @@ internal fun AdminRecordingScreen(
                         }
 
                         if (corrAlt != null) {
+                            // ── Precision gate ────────────────────────────────
+                            // Skip this sample if VPS accuracy is too poor to trust.
+                            // A node placed with hAcc > MAX_CAPTURE_PRECISION_M can end up
+                            // several metres into the wrong corridor, poisoning the graph.
+                            val hAcc = pose.horizontalAccuracy
+                            if (hAcc > capturePrecisionM) {
+                                lastCaptureTime = now   // prevent rapid-fire status updates
+                                statusMsg = "Waiting for VPS (±${String.format("%.1f", hAcc)}m > ${capturePrecisionM.toInt()}m)…"
+                                return@onSessionUpdated
+                            }
+
                             // Distance from the last node placed in this session.
                             val distFromLast = lastRecordedNode?.let {
                                 NavGraphPathfinder.distance3d(corrLat, corrLon, corrAlt, it.lat, it.lon, it.alt)
@@ -488,6 +503,7 @@ internal fun AdminRecordingScreen(
 
                                     scope.launch {
                                         db.navDao().insertNode(newNode)
+                                        preloadedNodes = preloadedNodes + newNode   // live minimap update
                                         sessionNodes++
                                         if (prevNode != null) {
                                             db.navDao().insertEdge(
@@ -613,6 +629,8 @@ internal fun AdminRecordingScreen(
                 onBuildingChange   = onBuildingChange,
                 currentFloor       = currentFloor,
                 onFloorChange      = onFloorChange,
+                capturePrecisionM  = capturePrecisionM,
+                onPrecisionChange  = { capturePrecisionM = it },
                 lastRecordedNode   = lastRecordedNode,
                 lastNodeType       = lastNodeType,
                 onMarkAs           = ::markLastNodeAs,

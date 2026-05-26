@@ -141,6 +141,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
 #map.mode-facing { cursor: crosshair; }
 #map.mode-edge   { cursor: crosshair; }
 #map.mode-door   { cursor: crosshair; }
+#map.mode-wall   { cursor: crosshair; }
 
 /* ── Drop overlay ── */
 #drop-overlay {
@@ -346,6 +347,7 @@ body.light .leg-place:hover { background: rgba(0,0,0,.07); }
   <button class="mode-btn"        id="btn-zone"   onclick="setMode('zone')">  <span class="icon">🏗</span> Allowed&nbsp;Zone</button>
   <button class="mode-btn"        id="btn-fill"   onclick="setMode('fill')">  <span class="icon">🪣</span> Fill&nbsp;Nodes</button>
   <button class="mode-btn"        id="btn-edge"   onclick="setMode('edge')">  <span class="icon">🔗</span> Connect</button>
+  <button class="mode-btn"        id="btn-wall"   onclick="setMode('wall')">  <span class="icon">🧱</span> Wall</button>
 
   <div class="sep"></div>
 
@@ -493,6 +495,8 @@ body.light .leg-place:hover { background: rgba(0,0,0,.07); }
     <div class="leg-line" style="background:transparent"></div>
     <div class="leg-row"><div class="leg-line" style="background:#c084fc"></div> Stair link</div>
     <div class="leg-row"><div class="leg-line" style="background:#f87171;border-top:2px dashed #f87171"></div> Cross-component</div>
+    <strong style="margin-top:6px">Walls</strong>
+    <div class="leg-row"><div class="leg-line" style="background:#ef4444;border-top:3px dashed #ef4444"></div> Wall (blocks paths)</div>
   </div>
 
   <div id="statusbar">
@@ -554,6 +558,7 @@ function applyTheme() {
   if (tileLayer) map.removeLayer(tileLayer);
   tileLayer = L.tileLayer(t.url, { attribution: t.attr, maxZoom: 22 }).addTo(map);
   render();
+  renderWalls();
 }
 
 function toggleTheme() {
@@ -596,6 +601,12 @@ let edgeFromId = null; // first node picked in 'edge' connect mode
 let doorPlaceLatLng = null; // map coordinate where the next door will land
 let qrExportData    = [];   // accumulated Room entries for export: [{id,name,floor,lat,lon,alt}]
 
+// Wall-draw state — two-click: first click sets p1, second click places the wall
+let wallP1          = null; // L.LatLng — first endpoint of the wall being drawn
+let wallP1Marker    = null; // L.CircleMarker — visual dot for the first endpoint
+let wallPreviewLine = null; // L.Polyline — live preview line while moving to p2
+let wallLayerGroup  = null; // L.LayerGroup — rendered wall segments
+
 // ═══════════════════════════════════════════════════════════════════════════
 // MAP SETUP
 // ═══════════════════════════════════════════════════════════════════════════
@@ -604,6 +615,7 @@ const map = L.map('map', { preferCanvas: true, zoomSnap: 0.5 }).setView([0,0], 2
 layerGroup          = L.layerGroup().addTo(map);
 zoneLayerGroup      = L.layerGroup().addTo(map);
 facingPreviewGroup  = L.layerGroup().addTo(map);
+wallLayerGroup      = L.layerGroup().addTo(map);
 applyTheme(); // sets tileLayer and initial colours
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -706,7 +718,7 @@ function render() {
     layerGroup.addLayer(L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{
       color, weight: isStair?2.5:1.5, opacity, dashArray: dash
     }).on('click', ev=>{
-      if (mode === 'door') return; // let map.on('click') handle node/door placement
+      if (mode === 'door' || mode === 'wall') return; // let map.on('click') handle placement
       L.DomEvent.stopPropagation(ev);
       if (aHidden || bHidden) return;
       if (mode === 'edge') { deleteEdgePair(e.fromId, e.toId); }
@@ -946,6 +958,7 @@ function pushUndo() {
 function undo() {
   if (!undoStack.length) return;
   graphData = JSON.parse(undoStack.pop());
+  if (!Array.isArray(graphData.walls)) graphData.walls = [];
   if (!undoStack.length) document.getElementById('undoBtn').disabled = true;
   selected.clear();
   // Remove any hidden IDs that no longer exist after undo
@@ -954,6 +967,7 @@ function undo() {
   updateSelUI();
   updateHiddenUI();
   render();
+  renderWalls();
   updateStats();
   setStatus('Undo applied');
 }
@@ -1005,12 +1019,13 @@ const MODE_HINTS = {
   fill:   'Click to place polygon vertices • Double-click to close polygon and configure fill',
   edge:   'Click a node to start an edge, then click another node to connect them • click edge to delete • Esc to cancel',
   door:   'Click anywhere on the map to place a door — you will be prompted for the room name',
+  wall:   'Click to set wall start point, click again to finish the wall segment • click an existing wall to delete it • Esc to cancel',
 };
-const MODE_LABELS = { view:'View', select:'Select', box:'Box Select', zone:'Allowed Zone', fill:'Fill Nodes', edge:'Connect', door:'Place Door' };
+const MODE_LABELS = { view:'View', select:'Select', box:'Box Select', zone:'Allowed Zone', fill:'Fill Nodes', edge:'Connect', door:'Place Door', wall:'Draw Wall' };
 
 function setMode(m) {
   mode = m;
-  ['view','select','box','zone','fill','edge','door'].forEach(id => {
+  ['view','select','box','zone','fill','edge','door','wall'].forEach(id => {
     document.getElementById('btn-'+id)?.classList.toggle('active', id === m);
   });
   const mapEl = document.getElementById('map');
@@ -1035,6 +1050,7 @@ function setMode(m) {
   if (m !== 'select') { selected.clear(); updateSelUI(); render(); }
   if (m !== 'fill') { hideFillPanel(); clearFillPoly(); }
   if (m !== 'door') cancelDoorPlace();
+  if (m !== 'wall') cancelWallDraw();
   updateLegendPlaceHighlight();
 }
 
@@ -1386,6 +1402,8 @@ function loadJSON(text) {
     return;
   }
   graphData  = data;
+  // Ensure the walls array exists even for older navgraph.json files that predate the feature
+  if (!Array.isArray(graphData.walls)) graphData.walls = [];
   undoStack  = [];
   selected.clear();
   hiddenNodes.clear();
@@ -1402,6 +1420,7 @@ function loadJSON(text) {
   updateStats();
   renderZones();
   render();
+  renderWalls();
 
   if (graphData.nodes.length) {
     const lats = graphData.nodes.map(n=>n.lat);
@@ -1411,7 +1430,9 @@ function loadJSON(text) {
       [Math.max(...lats)+.0002, Math.max(...lons)+.0002]
     ]);
   }
-  setStatus('Loaded — ' + graphData.nodes.length + ' nodes, ' + graphData.edges.length + ' edges');
+  const wallCount = graphData.walls?.length ?? 0;
+  const wallStr   = wallCount ? `, ${wallCount} wall${wallCount !== 1 ? 's' : ''}` : '';
+  setStatus('Loaded — ' + graphData.nodes.length + ' nodes, ' + graphData.edges.length + ' edges' + wallStr);
 }
 
 function exportJSON() {
@@ -1597,6 +1618,12 @@ map.on('click', e => {
     return;
   }
 
+  // ── Wall draw: two-click segment placement ──────────────────────────────
+  if (mode === 'wall') {
+    handleWallClick(e.latlng);
+    return;
+  }
+
   // ── Node move: relocate to clicked position ──────────────────────────────
   if (moveNodeId) {
     const nodeId = moveNodeId;
@@ -1704,6 +1731,124 @@ function cancelEdgeConnect() {
   edgeFromId = null;
   render();
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WALL DRAW
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Clear any in-progress wall draw (first endpoint placed but second not yet). */
+function cancelWallDraw() {
+  if (wallP1Marker)    { wallP1Marker.remove();    wallP1Marker    = null; }
+  if (wallPreviewLine) { wallPreviewLine.remove();  wallPreviewLine = null; }
+  wallP1 = null;
+}
+
+/** Re-draw the wallLayerGroup from graphData.walls. */
+function renderWalls() {
+  if (!wallLayerGroup) return;
+  wallLayerGroup.clearLayers();
+  if (!graphData?.walls?.length) return;
+
+  graphData.walls.forEach(w => {
+    const line = L.polyline([[w.lat1, w.lon1], [w.lat2, w.lon2]], {
+      color: '#ef4444', weight: 3, opacity: 0.85, dashArray: '8 5'
+    });
+    // Endpoint dots
+    const dot1 = L.circleMarker([w.lat1, w.lon1], { radius: 4, fillColor: '#ef4444', color: '#fff', weight: 1.5, fillOpacity: 1 });
+    const dot2 = L.circleMarker([w.lat2, w.lon2], { radius: 4, fillColor: '#ef4444', color: '#fff', weight: 1.5, fillOpacity: 1 });
+
+    // Click on the wall line to delete it (in any mode — walls are rare and clicks are intentional)
+    [line, dot1, dot2].forEach(layer => {
+      layer.on('click', ev => {
+        L.DomEvent.stopPropagation(ev);
+        pushUndo();
+        graphData.walls = graphData.walls.filter(x => x.id !== w.id);
+        renderWalls();
+        updateStats();
+        setStatus(`Wall deleted${w.label ? ' (' + w.label + ')' : ''} · export to save`);
+      });
+    });
+
+    wallLayerGroup.addLayer(line);
+    wallLayerGroup.addLayer(dot1);
+    wallLayerGroup.addLayer(dot2);
+
+    // Label tooltip if present
+    if (w.label) {
+      const midLat = (w.lat1 + w.lat2) / 2;
+      const midLon = (w.lon1 + w.lon2) / 2;
+      wallLayerGroup.addLayer(
+        L.marker([midLat, midLon], { opacity: 0 })
+          .bindTooltip(w.label, { permanent: true, className: 'stair-label', direction: 'top' })
+      );
+    }
+  });
+}
+
+/**
+ * Handle a map click in 'wall' mode.
+ * First click → set p1 and show a red dot.
+ * Second click → finish the wall, add to graphData.walls, re-render.
+ */
+function handleWallClick(latlng) {
+  if (!graphData) return;
+
+  if (!wallP1) {
+    // ── First click — set p1 ─────────────────────────────────────────────
+    wallP1 = latlng;
+    wallP1Marker = L.circleMarker([latlng.lat, latlng.lng], {
+      radius: 5, fillColor: '#ef4444', color: '#fff', weight: 2, fillOpacity: 1
+    }).addTo(map);
+    setStatus('Wall: start point set — click to place the other end • Esc to cancel');
+  } else {
+    // ── Second click — finish wall ───────────────────────────────────────
+    const p2 = latlng;
+    const dist = haversineM(wallP1.lat, wallP1.lng, p2.lat, p2.lng);
+    if (dist < 0.5) {
+      setStatus('Wall: endpoints too close — click further away');
+      return;
+    }
+
+    // Ask for an optional floor assignment and label
+    const floors = graphData.nodes.length
+      ? [...new Set(graphData.nodes.map(n => String(n.floor ?? '1')))]
+          .sort((a, b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b))
+      : ['1'];
+    const floorStr = prompt(
+      `Wall floor (${floors.join(' / ')}):`,
+      floors[0] ?? '1'
+    );
+    if (floorStr === null) { cancelWallDraw(); setStatus('Wall: cancelled'); return; }
+    const label = prompt('Optional wall label (leave blank to skip):') ?? '';
+
+    const wall = {
+      id:       crypto.randomUUID(),
+      building: '',
+      floor:    floorStr.trim() || (floors[0] ?? '1'),
+      lat1:     wallP1.lat,  lon1: wallP1.lng,
+      lat2:     p2.lat,      lon2: p2.lng,
+      label:    label.trim()
+    };
+
+    if (!graphData.walls) graphData.walls = [];
+    graphData.walls.push(wall);
+
+    cancelWallDraw();   // clear preview
+    renderWalls();
+    updateStats();
+    const floorLabel = `floor ${wall.floor}${wall.label ? ' "' + wall.label + '"' : ''}`;
+    setStatus(`Wall added on ${floorLabel} (${dist.toFixed(1)}m) · export navgraph.json to save`);
+  }
+}
+
+// Live preview: update the dashed line as the mouse moves toward p2
+map.on('mousemove', ev => {
+  if (mode !== 'wall' || !wallP1) return;
+  if (wallPreviewLine) wallPreviewLine.remove();
+  wallPreviewLine = L.polyline([[wallP1.lat, wallP1.lng], [ev.latlng.lat, ev.latlng.lng]], {
+    color: '#ef4444', weight: 2, opacity: 0.6, dashArray: '5 4'
+  }).addTo(map);
+});
 
 /**
  * Delete both directions of an edge between fromId and toId.
@@ -2196,8 +2341,10 @@ function updateStats() {
   const { nodes, edges } = graphData;
   const { find } = buildComponents(nodes, edges);
   const comps = new Set(nodes.map(n=>find(n.id))).size;
+  const wCount = graphData.walls?.length ?? 0;
+  const wallStr = wCount ? ` · ${wCount} wall${wCount !== 1 ? 's' : ''}` : '';
   document.getElementById('stats').textContent =
-    `${nodes.length} nodes · ${edges.length} edges · ${comps} component${comps!==1?'s':''}`;
+    `${nodes.length} nodes · ${edges.length} edges · ${comps} component${comps!==1?'s':''}${wallStr}`;
 }
 function setStatus(msg) {
   document.getElementById('status-hint').textContent = msg;
@@ -2234,6 +2381,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (edgeFromId) { cancelEdgeConnect(); setStatus(MODE_HINTS.edge); }
     else if (doorPlaceLatLng) { cancelDoorPlace(); }
+    else if (wallP1) { cancelWallDraw(); setStatus(MODE_HINTS.wall); }
     else { cancelFacingEdit(); cancelNodeMove(); deselect(); setMode('view'); }
   }
   if (e.key === 'z' && (e.ctrlKey||e.metaKey)) undo();

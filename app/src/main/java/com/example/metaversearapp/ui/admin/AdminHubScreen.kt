@@ -19,10 +19,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.FloorAltitude
-import com.example.metaversearapp.data.FloorAltitude
 import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphExport
 import com.example.metaversearapp.data.NavNode
+import com.example.metaversearapp.data.NavWall
 import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.Room
 import com.example.metaversearapp.data.RoomGistSync
@@ -92,6 +92,11 @@ internal fun AdminHubScreen(
                     // devices share the same reference altitude for each floor.
                     export.floorAltitudes.forEach { fa ->
                         db.floorAltDao().upsert(fa)
+                    }
+                    // Walls are Gist-only (no local-only walls) — replace fully.
+                    if (export.walls.isNotEmpty()) {
+                        db.navWallDao().clearAll()
+                        db.navWallDao().upsertAll(export.walls)
                     }
                 }
             }
@@ -215,10 +220,11 @@ internal fun AdminHubScreen(
                         val nodes     = db.navDao().getAllNodes()
                         val edges     = db.navDao().getAllEdges()
                         val floorAlts = db.floorAltDao().getAll()
-                        val result    = NavGistSync.upload(nodes, edges, floorAlts)
+                        val walls     = db.navWallDao().getAll()
+                        val result    = NavGistSync.upload(nodes, edges, floorAlts, walls)
                         isUploading  = false
                         uploadStatus = result.fold(
-                            onSuccess = { "✓ Uploaded ${nodes.size} nodes, ${edges.size} edges to Gist" },
+                            onSuccess = { "✓ Uploaded ${nodes.size} nodes, ${edges.size} edges, ${walls.size} wall(s) to Gist" },
                             onFailure = { "✗ Upload failed: ${it.message}" }
                         )
                     }
