@@ -29,6 +29,7 @@ android {
         // GitHub Gist secrets — defined in local.properties, never committed to VCS
         buildConfigField("String", "GITHUB_TOKEN",       "\"${localProperties.getProperty("GITHUB_TOKEN")       ?: ""}\"")
         buildConfigField("String", "NAV_GRAPH_GIST_ID",  "\"${localProperties.getProperty("NAV_GRAPH_GIST_ID")  ?: ""}\"")
+        buildConfigField("String", "ROOMS_GIST_ID",      "\"${localProperties.getProperty("ROOMS_GIST_ID")      ?: ""}\"")
 
         // ARCore Cloud Anchor keyless auth — service account credentials.
         // Properties.load() turns \n sequences into real newlines; re-escape them

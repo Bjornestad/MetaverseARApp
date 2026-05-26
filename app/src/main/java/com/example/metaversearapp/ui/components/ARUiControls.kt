@@ -661,10 +661,10 @@ private fun segmentBearing(lat1: Double, lon1: Double, lat2: Double, lon2: Doubl
 fun DestinationSelector(viewModel: ARViewModel) {
     var searchQuery by remember { mutableStateOf("") }
 
-    val filtered = remember(searchQuery, viewModel.allLocations) {
+    val filtered = remember(searchQuery, viewModel.allRooms) {
         val q = searchQuery.trim()
-        if (q.isBlank()) viewModel.allLocations
-        else viewModel.allLocations.filter { it.name.contains(q, ignoreCase = true) }
+        if (q.isBlank()) viewModel.allRooms
+        else viewModel.allRooms.filter { it.name.contains(q, ignoreCase = true) }
     }
 
     if (viewModel.isDropdownExpanded) {
@@ -705,7 +705,7 @@ fun DestinationSelector(viewModel: ARViewModel) {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     when {
-                        viewModel.allLocations.isEmpty() -> {
+                        viewModel.allRooms.isEmpty() -> {
                             Text(
                                 "No rooms loaded yet",
                                 color    = Color.Gray,
@@ -727,7 +727,7 @@ fun DestinationSelector(viewModel: ARViewModel) {
                                     .fillMaxWidth()
                                     .heightIn(max = 320.dp)
                             ) {
-                                items(filtered, key = { it.qrID }) { loc ->
+                                items(filtered, key = { it.id }) { loc ->
                                     TextButton(
                                         onClick  = {
                                             viewModel.onDestinationSelected(loc)

@@ -11,22 +11,15 @@ import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
 import com.example.metaversearapp.data.QrLocation
-import com.example.metaversearapp.data.toEntity
-import com.example.metaversearapp.data.QrFeature
+import com.example.metaversearapp.data.Room
+import com.example.metaversearapp.data.RoomGistSync
+import com.example.metaversearapp.data.toRoomId
 import com.google.ar.core.Earth
 import com.google.ar.core.GeospatialPose
 import com.google.ar.core.TrackingState
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.engine.android.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.request.*
-import io.ktor.http.ContentType
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -37,10 +30,10 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     var statusText by mutableStateOf("Initializing...")
         private set
 
-    var allLocations by mutableStateOf<List<QrLocation>>(emptyList())
+    var allRooms by mutableStateOf<List<Room>>(emptyList())
         private set
 
-    var selectedDestination by mutableStateOf<QrLocation?>(null)
+    var selectedDestination by mutableStateOf<Room?>(null)
     var isDropdownExpanded by mutableStateOf(false)
     var isScanning by mutableStateOf(false)
 
@@ -212,9 +205,9 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
     }
 
     /**
-     * Synthesises [QrLocation] entries for every DOOR node that has both a
+     * Synthesises [Room] entries for every DOOR node that has both a
      * [NavNode.label] (room name) and an [NavNode.anchorQrId] (room ID), then
-     * merges them into [allLocations].
+     * merges them into [allRooms].
      *
      * This means doors placed in the navgraph editor appear in the destination
      * picker even before the QR JSON has been uploaded to the Gist — no extra
@@ -224,64 +217,56 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
      *
      * Safe to call multiple times — the merge is additive and idempotent.
      */
+    /**
+     * Synthesises [Room] entries from every DOOR navgraph node that has a [NavNode.label]
+     * and [NavNode.anchorQrId] (used as the room ID), then merges them into [allRooms].
+     *
+     * Rooms already present in [allRooms] take precedence — they came from the Gist and
+     * are the source of truth.  This ensures that even if the Gist is unreachable, doors
+     * recorded in the navgraph still appear in the destination picker.
+     */
     private fun mergeNavDoorNodes() {
         if (navNodes.isEmpty()) return
-        val existingIds = allLocations.map { it.qrID }.toSet()
+        val existingIds = allRooms.map { it.id }.toSet()
         val synthetic = navNodes
             .filter { it.type == NodeType.DOOR && it.anchorQrId != null && it.label.isNotBlank() }
             .filter { it.anchorQrId !in existingIds }
             .map { node ->
-                QrLocation(
-                    qrID      = node.anchorQrId!!,
-                    name      = node.label,
-                    building  = "",
-                    floor     = node.floor,
-                    lat       = node.lat,
-                    lon       = node.lon,
-                    alt       = node.alt,
-                    direction = "Unknown",
-                    facingDeg = null
+                Room(
+                    id    = node.anchorQrId!!,
+                    name  = node.label,
+                    floor = node.floor,
+                    lat   = node.lat,
+                    lon   = node.lon,
+                    alt   = node.alt
                 )
             }
         if (synthetic.isNotEmpty()) {
-            allLocations = allLocations + synthetic
+            allRooms = allRooms + synthetic
         }
     }
 
     init {
-        syncLocations()
+        syncRooms()
         syncNavGraph()
         loadNavData()
     }
 
-    private fun syncLocations() {
+    /**
+     * Downloads the room list from the rooms Gist ([RoomGistSync]) and populates
+     * [allRooms].  Falls back to an empty list on network failure — door nodes in
+     * the local navgraph will still appear via [mergeNavDoorNodes].
+     */
+    private fun syncRooms() {
         viewModelScope.launch {
             try {
-                statusText = "Syncing locations..."
-                val client = HttpClient(Android) {
-                    install(ContentNegotiation) {
-                        json(Json { ignoreUnknownKeys = true; coerceInputValues = true }, contentType = ContentType.Any)
-                    }
-                }
-
-                val gistUrl = "https://gist.githubusercontent.com/Bjornestad/3b90e3bd67e9cd9a4bce90fb14f158e9/raw"
-
-                val locations = withContext(Dispatchers.IO) {
-                    val response: List<QrFeature> = client.get(gistUrl).body()
-                    db.qrDao().insertAll(response.map { it.toEntity() })
-                    db.qrDao().getAll()
-                }
-
-                allLocations = locations
+                statusText = "Syncing rooms…"
+                val result = withContext(Dispatchers.IO) { RoomGistSync.download() }
+                allRooms = result.getOrDefault(emptyList())
                 statusText = "Ready: Select Destination"
-                client.close()
             } catch (e: Exception) {
-                statusText = "Sync Failed: ${e.localizedMessage}"
-                allLocations = withContext(Dispatchers.IO) { db.qrDao().getAll() }
+                statusText = "Room sync failed — using local data"
             }
-            // Merge any door nodes recorded in the navgraph that aren't in the
-            // QR JSON yet — lets admins use the navgraph editor without having
-            // to also maintain the QR Gist for every new room.
             mergeNavDoorNodes()
         }
     }
@@ -317,11 +302,11 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         }
     }
 
-    fun onDestinationSelected(location: QrLocation) {
-        selectedDestination = location
+    fun onDestinationSelected(room: Room) {
+        selectedDestination = room
         isDropdownExpanded = false
         destinationPathNodes = emptyList()   // clear stale path while new one computes
-        statusText = "Targeting ${location.name}"
+        statusText = "Targeting ${room.name}"
         computeDestinationPath()
     }
 
@@ -350,9 +335,10 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
             val corrLon   = pose.longitude - lonOffset
             val startNode = NavGraphPathfinder.nearestNode(nodes, corrLat, corrLon)
 
-            // Prefer a DOOR node linked to this QR over the room-centre coordinates,
-            // since the door node was recorded at the actual physical door location.
-            val endNode = nodes.firstOrNull { it.anchorQrId == dest.qrID }
+            // Prefer the DOOR node whose room ID matches the destination's ID —
+            // that node was recorded at the physical door, which is more accurate
+            // than the GPS coordinates stored in the Room entry.
+            val endNode = nodes.firstOrNull { it.anchorQrId == dest.id }
                 ?: NavGraphPathfinder.nearestNode(nodes, dest.lat, dest.lon)
 
             if (startNode != null && endNode != null) {

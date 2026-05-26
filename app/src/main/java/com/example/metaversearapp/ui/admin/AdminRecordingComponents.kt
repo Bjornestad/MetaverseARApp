@@ -22,7 +22,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
-import com.example.metaversearapp.data.QrLocation
 import com.google.ar.core.GeospatialPose
 import com.google.ar.core.TrackingState
 import java.util.Locale
@@ -144,8 +143,6 @@ internal fun RecordingControlsPanel(
     lastRecordedNode:  NavNode?,
     lastNodeType:      NodeType,
     onMarkAs:          (NodeType) -> Unit,
-    isDoorScanActive:  Boolean    = false,
-    onCancelDoorScan:  () -> Unit = {},
     isRecording:       Boolean,
     onRecordToggle:    () -> Unit,
     onFinished:        () -> Unit,
@@ -160,8 +157,6 @@ internal fun RecordingControlsPanel(
         FloorSelectorCard(currentFloor, onFloorChange)
         MarkWaypointCard(lastRecordedNode, lastNodeType, onMarkAs)
         RecordingActionBar(
-            isDoorScanActive  = isDoorScanActive,
-            onCancelDoorScan  = onCancelDoorScan,
             isRecording       = isRecording,
             onRecordToggle    = onRecordToggle,
             cloudHostState    = cloudHostState,
@@ -279,14 +274,9 @@ private fun NodeIconButton(
     }
 }
 
-/**
- * Single-row icon button bar: record toggle | host anchor | finish.
- * When a door QR scan is active a cancel button appears on the left.
- */
+/** Single-row icon button bar: record toggle | host anchor | finish. */
 @Composable
 private fun RecordingActionBar(
-    isDoorScanActive:  Boolean,
-    onCancelDoorScan:  () -> Unit,
     isRecording:       Boolean,
     onRecordToggle:    () -> Unit,
     cloudHostState:    HostState,
@@ -306,17 +296,6 @@ private fun RecordingActionBar(
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment     = Alignment.CenterVertically
         ) {
-            // ── Cancel door QR scan (visible only while scanning) ────────────
-            if (isDoorScanActive) {
-                OutlinedIconButton(
-                    onClick = onCancelDoorScan,
-                    colors  = IconButtonDefaults.outlinedIconButtonColors(contentColor = Color(0xFFFF6B35)),
-                    border  = BorderStroke(1.dp, Color(0xFFFF6B35).copy(alpha = 0.7f))
-                ) {
-                    Icon(Icons.Default.QrCodeScanner, contentDescription = "Cancel QR scan")
-                }
-            }
-
             // ── Record toggle ────────────────────────────────────────────────
             val recColor = if (isRecording) Color.Red else Color(0xFF64FFDA)
             OutlinedIconButton(
@@ -384,14 +363,13 @@ private fun RecordingActionBar(
 // ── Door assignment management dialog ──────────────────────────────────────────
 
 /**
- * Hub-screen dialog that lists every DOOR node with its current linked room.
- * The admin can re-link any door to a different room, or unlink it entirely.
+ * Hub-screen dialog that lists every DOOR node and its current room name.
+ * The admin can rename or unlink any door.
  */
 @Composable
 internal fun DoorManagementDialog(
     doorNodes: List<NavNode>,
-    qrMap:     Map<String, QrLocation>,
-    onReLink:  (NavNode) -> Unit,
+    onRename:  (NavNode) -> Unit,
     onUnLink:  (NavNode) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -421,9 +399,7 @@ internal fun DoorManagementDialog(
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     doorNodes.forEach { node ->
-                        val linkedQr   = node.anchorQrId?.let { qrMap[it] }
-                        val isLinked   = node.anchorQrId != null
-                        val isOrphaned = isLinked && linkedQr == null // QR removed from DB
+                        val isLinked = node.label.isNotBlank()
 
                         Card(
                             colors   = CardDefaults.cardColors(containerColor = Color(0xFF2A2A2A)),
@@ -439,55 +415,32 @@ internal fun DoorManagementDialog(
                             ) {
                                 // ── Info ────────────────────────────────────
                                 Column(modifier = Modifier.weight(1f)) {
-                                    when {
-                                        linkedQr != null -> {
-                                            Text(
-                                                linkedQr.name,
-                                                color      = Color.White,
-                                                fontSize   = 13.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                buildString {
-                                                    if (linkedQr.building.isNotBlank()) append("${linkedQr.building}  ·  ")
-                                                    append("Floor ${node.floor}")
-                                                },
-                                                color    = Color.Gray,
-                                                fontSize = 11.sp
-                                            )
-                                        }
-                                        isOrphaned -> {
-                                            Text(
-                                                "Linked to deleted room",
-                                                color      = Color(0xFFFF8A65),
-                                                fontSize   = 13.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                "Floor ${node.floor}  ·  ID …${node.anchorQrId?.takeLast(8)}",
-                                                color    = Color.Gray,
-                                                fontSize = 11.sp
-                                            )
-                                        }
-                                        else -> {
-                                            Text(
-                                                "Unlinked",
-                                                color      = Color(0xFFFFCC80),
-                                                fontSize   = 13.sp,
-                                                fontWeight = FontWeight.SemiBold
-                                            )
-                                            Text(
-                                                "Floor ${node.floor}",
-                                                color    = Color.Gray,
-                                                fontSize = 11.sp
-                                            )
-                                        }
+                                    if (isLinked) {
+                                        Text(
+                                            node.label,
+                                            color      = Color.White,
+                                            fontSize   = 13.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text(
+                                            "Floor ${node.floor}  ·  ID: ${node.anchorQrId ?: "—"}",
+                                            color    = Color.Gray,
+                                            fontSize = 11.sp
+                                        )
+                                    } else {
+                                        Text(
+                                            "Unnamed door",
+                                            color      = Color(0xFFFFCC80),
+                                            fontSize   = 13.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        Text("Floor ${node.floor}", color = Color.Gray, fontSize = 11.sp)
                                     }
                                 }
 
-                                // ── Re-link button ───────────────────────────
+                                // ── Rename button ────────────────────────────
                                 OutlinedIconButton(
-                                    onClick  = { onReLink(node) },
+                                    onClick  = { onRename(node) },
                                     modifier = Modifier.size(32.dp),
                                     colors   = IconButtonDefaults.outlinedIconButtonColors(
                                         contentColor = Color(0xFF64FFDA)
@@ -496,7 +449,7 @@ internal fun DoorManagementDialog(
                                 ) {
                                     Icon(
                                         Icons.Default.Edit,
-                                        contentDescription = "Re-link",
+                                        contentDescription = "Rename",
                                         modifier           = Modifier.size(14.dp)
                                     )
                                 }
@@ -513,7 +466,7 @@ internal fun DoorManagementDialog(
                                     ) {
                                         Icon(
                                             Icons.Default.LinkOff,
-                                            contentDescription = "Unlink",
+                                            contentDescription = "Remove name",
                                             modifier           = Modifier.size(14.dp)
                                         )
                                     }
@@ -533,64 +486,49 @@ internal fun DoorManagementDialog(
     )
 }
 
-// ── Door → QR link picker dialog ───────────────────────────────────────────────
+// ── Door name dialog ───────────────────────────────────────────────────────────
 
 /**
- * Dialog shown after the admin marks a node as DOOR.
- * All known rooms are shown in a searchable, scrollable list so the admin can
- * find and link any room regardless of its distance from the door node.
+ * Shown after the admin marks a node as DOOR (or renames an existing door).
+ * The admin types a free-form room name; a URL-safe ID is generated automatically.
  *
- * [onScanQr] is optional — when provided (recording screen only), a "Scan QR"
- * button appears as an alternative to manual room selection.  When null (hub
- * screen re-link flow) the button is hidden.
+ * [initialName] pre-fills the field when renaming an existing door.
  */
 @Composable
-internal fun DoorLinkPickerDialog(
-    candidates:   List<Pair<QrLocation, Double>>,
-    onLink:       (QrLocation) -> Unit,
-    showDistance: Boolean         = true,
-    onScanQr:     (() -> Unit)?   = null,
-    onDismiss:    () -> Unit,
+internal fun DoorNameDialog(
+    initialName: String    = "",
+    onConfirm:   (String) -> Unit,
+    onDismiss:   () -> Unit,
 ) {
-    var query by remember { mutableStateOf("") }
-
-    val filtered = remember(query, candidates) {
-        if (query.isBlank()) candidates
-        else candidates.filter { (qr, _) ->
-            qr.name.contains(query, ignoreCase = true) ||
-            qr.building.contains(query, ignoreCase = true) ||
-            qr.floor.contains(query, ignoreCase = true)
-        }
-    }
+    var name by remember { mutableStateOf(initialName) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor   = Color(0xFF1E1E1E),
         title = {
             Text(
-                "Link door to room",
+                if (initialName.isBlank()) "Name this room" else "Rename room",
                 color      = Color(0xFF64FFDA),
                 fontWeight = FontWeight.Bold
             )
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-
-                // ── Search field ─────────────────────────────────────────────
+                Text(
+                    "Enter a name — it will appear in the destination picker for all users.",
+                    color    = Color.Gray,
+                    fontSize = 12.sp
+                )
                 OutlinedTextField(
-                    value            = query,
-                    onValueChange    = { query = it },
-                    placeholder      = { Text("Search rooms…", color = Color.Gray) },
-                    singleLine       = true,
-                    leadingIcon      = {
-                        Icon(
-                            Icons.Default.Search,
-                            contentDescription = null,
-                            tint = Color.Gray
-                        )
+                    value         = name,
+                    onValueChange = { name = it },
+                    placeholder   = { Text("e.g. Room 101, Main Entrance…", color = Color.Gray) },
+                    singleLine    = true,
+                    leadingIcon   = {
+                        Icon(Icons.Default.MeetingRoom, contentDescription = null, tint = Color.Gray)
                     },
-                    trailingIcon     = if (query.isNotEmpty()) {{
-                        IconButton(onClick = { query = "" }) {
+                    trailingIcon  = if (name.isNotEmpty()) {{
+                        IconButton(onClick = { name = "" }) {
                             Icon(Icons.Default.Close, contentDescription = "Clear", tint = Color.Gray)
                         }
                     }} else null,
@@ -603,85 +541,21 @@ internal fun DoorLinkPickerDialog(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
-
-                // ── Results list ─────────────────────────────────────────────
-                if (filtered.isEmpty()) {
-                    Text(
-                        "No rooms match \"$query\"",
-                        color    = Color.Gray,
-                        fontSize = 13.sp,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                } else {
-                    Column(
-                        modifier            = Modifier
-                            .heightIn(max = 320.dp)
-                            .verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        filtered.forEach { (qr, dist) ->
-                            OutlinedButton(
-                                onClick  = { onLink(qr) },
-                                modifier = Modifier.fillMaxWidth(),
-                                shape    = RoundedCornerShape(8.dp),
-                                colors   = ButtonDefaults.outlinedButtonColors(
-                                    contentColor = Color.White
-                                ),
-                                border   = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f))
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 2.dp)
-                                ) {
-                                    Text(
-                                        qr.name,
-                                        fontWeight = FontWeight.SemiBold,
-                                        fontSize   = 14.sp
-                                    )
-                                    Text(
-                                        buildString {
-                                            if (showDistance) {
-                                                append("${dist.toInt()} m")
-                                                if (qr.building.isNotBlank() || qr.floor.isNotBlank()) append("  ·  ")
-                                            }
-                                            if (qr.building.isNotBlank()) {
-                                                append(qr.building)
-                                                if (qr.floor.isNotBlank()) append("  ·  ")
-                                            }
-                                            if (qr.floor.isNotBlank()) append("Floor ${qr.floor}")
-                                        },
-                                        color    = Color.Gray,
-                                        fontSize = 11.sp
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
         },
         confirmButton = {
-            if (onScanQr != null) {
-                OutlinedButton(
-                    onClick = onScanQr,
-                    border  = BorderStroke(1.dp, Color(0xFF64FFDA).copy(alpha = 0.6f)),
-                    colors  = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF64FFDA))
-                ) {
-                    Icon(
-                        Icons.Default.QrCodeScanner,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text("Scan QR")
-                }
+            TextButton(
+                onClick  = { if (name.isNotBlank()) onConfirm(name.trim()) },
+                enabled  = name.isNotBlank()
+            ) {
+                Text("Save", color = if (name.isNotBlank()) Color(0xFF64FFDA) else Color.Gray)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Skip — leave unlinked", color = Color.Gray)
+                Text("Skip", color = Color.Gray)
             }
         }
     )
 }
+

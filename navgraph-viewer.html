@@ -64,10 +64,14 @@ body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--b
 
 /* ── Toolbar ── */
 #toolbar {
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
   padding: 7px 12px; background: var(--tb-bg); border-bottom: 1px solid var(--tb-border);
   flex-shrink: 0; min-height: 46px;
+  overflow-x: auto; overflow-y: hidden;
+  scrollbar-width: thin; scrollbar-color: var(--sep) transparent;
 }
+#toolbar::-webkit-scrollbar { height: 4px; }
+#toolbar::-webkit-scrollbar-thumb { background: var(--sep); border-radius: 2px; }
 #toolbar h1 { font-size: 14px; font-weight: 700; color: var(--title); white-space: nowrap; margin-right: 4px; }
 .sep { width: 1px; height: 22px; background: var(--sep); flex-shrink: 0; }
 
@@ -136,6 +140,7 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
 #map.mode-fill   { cursor: crosshair; }
 #map.mode-facing { cursor: crosshair; }
 #map.mode-edge   { cursor: crosshair; }
+#map.mode-door   { cursor: crosshair; }
 
 /* ── Drop overlay ── */
 #drop-overlay {
@@ -229,6 +234,57 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
 }
 .fill-cancel:hover { border-color: var(--btn-hover-bd); }
 
+/* ── Legend placement rows ── */
+.leg-place {
+  cursor: pointer; border-radius: 4px;
+  padding: 1px 5px; margin: 0 -5px;
+  transition: background .12s;
+  justify-content: space-between;
+}
+.leg-place:hover { background: rgba(255,255,255,.09); }
+body.light .leg-place:hover { background: rgba(0,0,0,.07); }
+.leg-place.active {
+  background: rgba(251,146,60,.18);
+  outline: 1px solid rgba(251,146,60,.45);
+}
+.leg-place-plus {
+  font-size: 13px; font-weight: 700; color: var(--label);
+  margin-left: 6px; line-height: 1;
+}
+.leg-place:hover .leg-place-plus { color: #fb923c; }
+.leg-place.active .leg-place-plus { color: #fb923c; content: '✕'; }
+#legend strong:first-child::after {
+  content: ' — click to place';
+  font-size: 9px; font-weight: 400; color: var(--label);
+  text-transform: none; letter-spacing: 0;
+}
+
+/* ── Door placement panel ── */
+#door-panel {
+  position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+  z-index: 1100; display: none;
+  background: var(--panel-bg); border: 1px solid var(--panel-bd);
+  border-radius: 12px; padding: 16px 18px; min-width: 290px;
+  backdrop-filter: blur(8px); box-shadow: 0 8px 32px #0006;
+}
+#door-title { font-size: 14px; font-weight: 700; color: #fb923c; margin-bottom: 12px; }
+.door-full-inp {
+  width: 100%; padding: 4px 8px; border-radius: 5px; font-size: 13px;
+  border: 1px solid var(--btn-bd); background: var(--btn-bg); color: var(--btn-fg);
+  margin-bottom: 2px;
+}
+.door-full-inp:focus { outline: none; border-color: #fb923c; }
+.door-check-row {
+  display: flex; align-items: center; gap: 7px;
+  margin-bottom: 8px; font-size: 12px; color: var(--panel-key); cursor: pointer;
+}
+.door-check-row input[type=checkbox] { cursor: pointer; accent-color: #fb923c; }
+.qr-badge {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font-size: 11px; background: #fb923c; color: #fff; font-weight: 600; margin-left: 4px;
+}
+.door-hint { font-size: 11px; color: var(--label); margin-bottom: 10px; }
+
 /* ── Node edit form (inline in info panel) ── */
 .node-edit-row {
   display: flex; align-items: center; justify-content: space-between;
@@ -271,9 +327,15 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
   <div class="sep"></div>
 
   <!-- File actions -->
-  <button class="act-btn safe" onclick="document.getElementById('fileInput').click()">📂 Load</button>
+  <button class="act-btn safe" onclick="document.getElementById('fileInput').click()">📂 Load NavGraph</button>
   <input type="file" id="fileInput" accept=".json" style="display:none">
-  <button class="act-btn safe" id="exportBtn" onclick="exportJSON()" disabled>💾 Export</button>
+  <button class="act-btn safe" id="exportBtn" onclick="exportJSON()" disabled>💾 Export NavGraph</button>
+
+  <div class="sep"></div>
+
+  <button class="act-btn safe" onclick="document.getElementById('qrFileInput').click()">📂 Load Rooms</button>
+  <input type="file" id="qrFileInput" accept=".json" style="display:none">
+  <button class="act-btn warn" id="exportQrBtn" onclick="exportQrJSON()" disabled>🚪 Export Rooms&nbsp;(<span id="qrCount">0</span>)</button>
 
   <div class="sep"></div>
 
@@ -356,13 +418,71 @@ body.light .type-btn { color: color-mix(in srgb, var(--tc) 80%, #000); }
     </div>
   </div>
 
+  <!-- Node placement panel (shared by all types) -->
+  <div id="door-panel">
+    <div id="door-title">📍 Place Waypoint</div>
+    <!-- Door-only fields -->
+    <div id="door-name-row" class="fill-row" style="display:none">
+      <label>Room name</label>
+      <input id="doorName" class="door-full-inp" type="text" placeholder="e.g. Room 101" oninput="doorAutoId()">
+    </div>
+    <div id="door-qrid-row" class="fill-row" style="display:none">
+      <label>Room ID</label>
+      <input id="doorQrId" class="door-full-inp" type="text" placeholder="auto">
+    </div>
+    <!-- Shared fields -->
+    <div class="fill-row">
+      <label>Floor</label>
+      <div class="fill-inp-wrap">
+        <select id="doorFloor" style="width:80px;padding:3px 6px;border-radius:5px;font-size:12px;border:1px solid var(--btn-bd);background:var(--btn-bg);color:var(--btn-fg)"></select>
+      </div>
+    </div>
+    <div class="fill-row">
+      <label>Altitude</label>
+      <div class="fill-inp-wrap"><input id="doorAlt" type="number" value="0" step="0.5"
+        style="width:64px;padding:3px 6px;border-radius:5px;font-size:12px;border:1px solid var(--btn-bd);background:var(--btn-bg);color:var(--btn-fg);text-align:right">
+        <span class="fill-unit">m</span></div>
+    </div>
+    <div class="fill-row">
+      <label>Connect radius</label>
+      <div class="fill-inp-wrap"><input id="doorSnap" type="number" value="6.0" min="0.5" step="0.5"
+        style="width:64px;padding:3px 6px;border-radius:5px;font-size:12px;border:1px solid var(--btn-bd);background:var(--btn-bg);color:var(--btn-fg);text-align:right">
+        <span class="fill-unit">m</span></div>
+    </div>
+    <!-- Door-only QR export checkbox -->
+    <label id="door-qr-check-row" class="door-check-row" style="display:none">
+      <input type="checkbox" id="doorAddQr" checked>
+      Also add to rooms list
+    </label>
+    <div class="door-hint" id="doorCoordHint"></div>
+    <div class="fill-btns">
+      <button class="fill-ok"     id="doorPlaceBtn" onclick="confirmDoorPlace()">Place</button>
+      <button class="fill-cancel" onclick="cancelDoorPlace()">Cancel</button>
+    </div>
+  </div>
+
   <div id="legend">
     <strong>Nodes</strong>
-    <div class="leg-row"><div class="leg-dot" style="background:#38bdf8"></div> Waypoint</div>
-    <div class="leg-row"><div class="leg-dot" style="background:#fb923c;border-radius:3px"></div> Door</div>
-    <div class="leg-row"><div class="leg-dot" style="background:#a78bfa"></div> Stair Top</div>
-    <div class="leg-row"><div class="leg-dot" style="background:#60a5fa"></div> Stair Middle</div>
-    <div class="leg-row"><div class="leg-dot" style="background:#4ade80"></div> Stair Bottom</div>
+    <div class="leg-row leg-place" data-type="WAYPOINT"      onclick="setPlaceType('WAYPOINT')">
+      <div class="leg-dot" style="background:#38bdf8"></div> Waypoint
+      <span class="leg-place-plus">+</span>
+    </div>
+    <div class="leg-row leg-place" data-type="DOOR"          onclick="setPlaceType('DOOR')">
+      <div class="leg-dot" style="background:#fb923c;border-radius:3px"></div> Door
+      <span class="leg-place-plus">+</span>
+    </div>
+    <div class="leg-row leg-place" data-type="STAIR_TOP"     onclick="setPlaceType('STAIR_TOP')">
+      <div class="leg-dot" style="background:#a78bfa"></div> Stair Top
+      <span class="leg-place-plus">+</span>
+    </div>
+    <div class="leg-row leg-place" data-type="STAIR_MIDDLE"  onclick="setPlaceType('STAIR_MIDDLE')">
+      <div class="leg-dot" style="background:#60a5fa"></div> Stair Middle
+      <span class="leg-place-plus">+</span>
+    </div>
+    <div class="leg-row leg-place" data-type="STAIR_BOTTOM"  onclick="setPlaceType('STAIR_BOTTOM')">
+      <div class="leg-dot" style="background:#4ade80"></div> Stair Bottom
+      <span class="leg-place-plus">+</span>
+    </div>
     <div class="leg-row"><div class="leg-dot" style="background:#fbbf24;border:2px solid #fbbf24"></div> Selected</div>
     <div class="leg-row"><div class="leg-dot" style="background:#f87171;border:2px dashed #f87171"></div> Disconnected</div>
     <div class="leg-row"><div class="leg-dot" style="background:transparent;border:2px dashed #fde047"></div> Cloud anchor</div>
@@ -471,6 +591,10 @@ let moveNodeId = null; // node ID being repositioned via click-on-map
 
 // Connect-edge state
 let edgeFromId = null; // first node picked in 'edge' connect mode
+
+// Door-placement state
+let doorPlaceLatLng = null; // map coordinate where the next door will land
+let qrExportData    = [];   // accumulated Room entries for export: [{id,name,floor,lat,lon,alt}]
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MAP SETUP
@@ -582,6 +706,7 @@ function render() {
     layerGroup.addLayer(L.polyline([[a.lat,a.lon],[b.lat,b.lon]],{
       color, weight: isStair?2.5:1.5, opacity, dashArray: dash
     }).on('click', ev=>{
+      if (mode === 'door') return; // let map.on('click') handle node/door placement
       L.DomEvent.stopPropagation(ev);
       if (aHidden || bHidden) return;
       if (mode === 'edge') { deleteEdgePair(e.fromId, e.toId); }
@@ -619,6 +744,7 @@ function render() {
 
     circle.on('click', ev => {
       if (moveNodeId) return; // let map.on('click') handle node placement
+      if (mode === 'door') return; // let map.on('click') handle node/door placement
       L.DomEvent.stopPropagation(ev);
       if (mode === 'edge' && !isHidden) {
         handleEdgeClick(n.id);
@@ -645,6 +771,7 @@ function render() {
       });
       halo.on('click', ev => {
         if (moveNodeId) return; // let map.on('click') handle node placement
+        if (mode === 'door') return; // let map.on('click') handle node/door placement
         L.DomEvent.stopPropagation(ev);
         if (mode === 'edge' && !isHidden) handleEdgeClick(n.id);
         else if (mode === 'select') toggleSelect(n.id);
@@ -877,13 +1004,14 @@ const MODE_HINTS = {
   zone:   'Drag rectangles to mark allowed building areas • then Trim to Zones',
   fill:   'Click to place polygon vertices • Double-click to close polygon and configure fill',
   edge:   'Click a node to start an edge, then click another node to connect them • click edge to delete • Esc to cancel',
+  door:   'Click anywhere on the map to place a door — you will be prompted for the room name',
 };
-const MODE_LABELS = { view:'View', select:'Select', box:'Box Select', zone:'Allowed Zone', fill:'Fill Nodes', edge:'Connect' };
+const MODE_LABELS = { view:'View', select:'Select', box:'Box Select', zone:'Allowed Zone', fill:'Fill Nodes', edge:'Connect', door:'Place Door' };
 
 function setMode(m) {
   mode = m;
-  ['view','select','box','zone','fill','edge'].forEach(id => {
-    document.getElementById('btn-'+id).classList.toggle('active', id === m);
+  ['view','select','box','zone','fill','edge','door'].forEach(id => {
+    document.getElementById('btn-'+id)?.classList.toggle('active', id === m);
   });
   const mapEl = document.getElementById('map');
   mapEl.className = m !== 'view' ? `mode-${m}` : '';
@@ -906,6 +1034,8 @@ function setMode(m) {
   if (m !== 'edge') cancelEdgeConnect();
   if (m !== 'select') { selected.clear(); updateSelUI(); render(); }
   if (m !== 'fill') { hideFillPanel(); clearFillPoly(); }
+  if (m !== 'door') cancelDoorPlace();
+  updateLegendPlaceHighlight();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1456,9 +1586,16 @@ map.on('mousemove', e => {
   setStatus(`🧭 Facing: ${hdg.toFixed(1)}° (${bearingLabel(hdg)}) — click to confirm · Esc to cancel`);
 });
 
-// Confirm on click — handles both facing-edit and node-move
+// Confirm on click — handles door placement, facing-edit and node-move
 map.on('click', e => {
   if (mode === 'fill') return; // fill click handler runs first via its own listener
+
+  // ── Door placement: capture latlng and open panel ───────────────────────
+  if (mode === 'door' && !doorPlaceLatLng) {
+    doorPlaceLatLng = e.latlng;
+    showDoorPanel();
+    return;
+  }
 
   // ── Node move: relocate to clicked position ──────────────────────────────
   if (moveNodeId) {
@@ -1751,6 +1888,307 @@ function cancelNodeMove() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// NODE PLACEMENT  (legend click → place any node type on the map)
+// ═══════════════════════════════════════════════════════════════════════════
+
+let placeNodeType = 'WAYPOINT'; // active type when mode === 'door'
+
+const PLACE_LABELS = {
+  WAYPOINT:     'Waypoint',
+  DOOR:         'Door',
+  STAIR_TOP:    'Stair Top',
+  STAIR_MIDDLE: 'Stair Middle',
+  STAIR_BOTTOM: 'Stair Bottom',
+};
+const PLACE_ICONS = {
+  WAYPOINT:     '📍',
+  DOOR:         '🚪',
+  STAIR_TOP:    '🪜',
+  STAIR_MIDDLE: '🪜',
+  STAIR_BOTTOM: '🪜',
+};
+
+/** Called when the user clicks a legend row. Toggles placement mode. */
+function setPlaceType(type) {
+  if (mode === 'door' && placeNodeType === type) {
+    setMode('view'); // click same type again → cancel
+    return;
+  }
+  placeNodeType = type;
+  setMode('door');
+  updateLegendPlaceHighlight();
+  setStatus(`${PLACE_ICONS[type]} Click the map to place a ${PLACE_LABELS[type]} — click legend again or Esc to cancel`);
+}
+
+/** Highlight the active legend row; clear all others. */
+function updateLegendPlaceHighlight() {
+  document.querySelectorAll('.leg-place').forEach(el => {
+    const active = mode === 'door' && el.dataset.type === placeNodeType;
+    el.classList.toggle('active', active);
+    el.querySelector('.leg-place-plus').textContent = active ? '✕' : '+';
+  });
+}
+
+/** Convert a room name to a safe slug for use as a QR / Room ID. */
+function slugify(name) {
+  return name.trim().toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-z0-9_]/g, '')
+    .slice(0, 40) || 'room';
+}
+
+/** Auto-populate the Room ID field from the room name (unless manually edited). */
+function doorAutoId() {
+  const name = document.getElementById('doorName').value;
+  const idEl = document.getElementById('doorQrId');
+  if (!idEl.dataset.manual) idEl.value = slugify(name);
+}
+
+/** Open the placement panel after the user has clicked the map. */
+function showDoorPanel() {
+  if (!doorPlaceLatLng) return;
+  const isDoor = placeNodeType === 'DOOR';
+
+  // ── Panel title + button label ───────────────────────────────────────────
+  document.getElementById('door-title').textContent =
+    `${PLACE_ICONS[placeNodeType]} Place ${PLACE_LABELS[placeNodeType]}`;
+  document.getElementById('doorPlaceBtn').textContent =
+    `Place ${PLACE_LABELS[placeNodeType]}`;
+
+  // ── Show/hide door-only fields ───────────────────────────────────────────
+  ['door-name-row','door-qrid-row','door-qr-check-row']
+    .forEach(id => { document.getElementById(id).style.display = isDoor ? '' : 'none'; });
+
+  // ── Populate floor dropdown ──────────────────────────────────────────────
+  const sel = document.getElementById('doorFloor');
+  sel.innerHTML = '';
+  const existingFloors = graphData
+    ? [...new Set(graphData.nodes.map(n => String(n.floor ?? '1')))]
+        .sort((a, b) => parseFloat(a) - parseFloat(b) || a.localeCompare(b))
+    : ['1'];
+  if (!existingFloors.length) existingFloors.push('1');
+  existingFloors.forEach(fl => {
+    const opt = document.createElement('option');
+    opt.value = fl; opt.textContent = 'F' + fl;
+    sel.appendChild(opt);
+  });
+  const optNew = document.createElement('option');
+  optNew.value = '__new__'; optNew.textContent = '+ New…';
+  sel.appendChild(optNew);
+
+  function autoAltForFloor() {
+    const fl = sel.value;
+    if (fl === '__new__' || !graphData) return;
+    const flNodes = graphData.nodes.filter(n => String(n.floor ?? '1') === fl && n.alt != null);
+    if (flNodes.length) {
+      document.getElementById('doorAlt').value =
+        (flNodes.reduce((s, n) => s + n.alt, 0) / flNodes.length).toFixed(2);
+    }
+  }
+  sel.onchange = () => {
+    if (sel.value === '__new__') {
+      const val = prompt('Enter new floor number or label:');
+      if (val?.trim()) {
+        const opt = document.createElement('option');
+        opt.value = val.trim(); opt.textContent = 'F' + val.trim();
+        sel.insertBefore(opt, optNew);
+        sel.value = val.trim();
+      } else { sel.value = existingFloors[0] || '1'; }
+    }
+    autoAltForFloor();
+  };
+  autoAltForFloor();
+
+  // ── Reset door-specific fields ───────────────────────────────────────────
+  if (isDoor) {
+    const nameEl = document.getElementById('doorName');
+    const idEl   = document.getElementById('doorQrId');
+    nameEl.value = ''; idEl.value = '';
+    delete idEl.dataset.manual;
+    idEl.oninput = () => { idEl.dataset.manual = '1'; };
+  }
+
+  // ── Coordinate hint ──────────────────────────────────────────────────────
+  document.getElementById('doorCoordHint').textContent =
+    `📍 ${doorPlaceLatLng.lat.toFixed(6)}, ${doorPlaceLatLng.lng.toFixed(6)}`;
+
+  document.getElementById('door-panel').style.display = 'block';
+  const focusEl = isDoor
+    ? document.getElementById('doorName')
+    : document.getElementById('doorFloor');
+  focusEl.focus();
+}
+
+/** Commit the node to the navgraph. */
+function confirmDoorPlace() {
+  const isDoor   = placeNodeType === 'DOOR';
+  const latlng   = doorPlaceLatLng;
+  const floorSel = document.getElementById('doorFloor');
+  const floor    = floorSel.value === '__new__' ? '1' : floorSel.value;
+  const alt      = parseFloat(document.getElementById('doorAlt').value) || 0;
+  const snapM    = Math.max(0.5, parseFloat(document.getElementById('doorSnap').value) || 6.0);
+
+  let name = '', qrId = '', addToQr = false;
+  if (isDoor) {
+    name = document.getElementById('doorName').value.trim();
+    if (!name) {
+      document.getElementById('doorName').style.borderColor = '#f87171';
+      document.getElementById('doorName').focus();
+      return;
+    }
+    document.getElementById('doorName').style.borderColor = '';
+    qrId     = document.getElementById('doorQrId').value.trim() || slugify(name);
+    addToQr  = document.getElementById('doorAddQr').checked;
+  }
+
+  if (!graphData) graphData = { nodes: [], edges: [] };
+  pushUndo();
+
+  const prefix = placeNodeType.toLowerCase().replace('_', '-');
+  const id = `${prefix}-` + Math.random().toString(36).slice(2, 10);
+  const node = {
+    id,
+    lat:               latlng.lat,
+    lon:               latlng.lng,
+    alt,
+    floor,
+    type:              placeNodeType,
+    anchorQrId:        isDoor ? qrId : null,
+    label:             isDoor ? name : '',
+    cloudAnchorId:     null,
+    cloudAnchorHeading: null,
+    facingDeg:         null,
+  };
+  graphData.nodes.push(node);
+
+  // ── Auto-connect to nearby same-floor nodes ──────────────────────────────
+  const seen = new Set(graphData.edges.map(e => `${e.fromId}|${e.toId}`));
+  let bridged = 0;
+  for (const other of graphData.nodes) {
+    if (other.id === id) continue;
+    if (String(other.floor ?? '1') !== String(floor)) continue;
+    const d = haversineM(node.lat, node.lon, other.lat, other.lon);
+    if (d <= snapM) {
+      const fwd = `${id}|${other.id}`, rev = `${other.id}|${id}`;
+      if (!seen.has(fwd)) { graphData.edges.push({ fromId: id,       toId: other.id, weight: d }); seen.add(fwd); bridged++; }
+      if (!seen.has(rev)) { graphData.edges.push({ fromId: other.id, toId: id,       weight: d }); seen.add(rev); }
+    }
+  }
+
+  // ── Ensure floor chip is visible ─────────────────────────────────────────
+  if (!activeFloors.has(String(floor))) {
+    activeFloors.add(String(floor));
+    buildFloorChips([...new Set(graphData.nodes.map(n => String(n.floor ?? '1')))]);
+  }
+
+  // ── Rooms export (doors only) ────────────────────────────────────────────
+  if (isDoor && addToQr) {
+    qrExportData = qrExportData.filter(r => r.id !== qrId);
+    qrExportData.push({ id: qrId, name, floor, lat: node.lat, lon: node.lon, alt });
+    updateQrUI();
+  }
+
+  hideDoorPanel();
+  render();
+  updateStats();
+  document.getElementById('exportBtn').disabled = false;
+
+  const label  = PLACE_LABELS[placeNodeType];
+  const nameStr = isDoor ? ` "${name}"` : '';
+  const qrNote  = isDoor && addToQr ? ` · added to rooms list (${qrExportData.length})` : '';
+  setStatus(`✅ ${label}${nameStr} placed on floor ${floor} · ${bridged} node(s) connected${qrNote}`);
+}
+
+function cancelDoorPlace() {
+  if (document.getElementById('door-panel').style.display !== 'none') {
+    hideDoorPanel();
+  }
+  doorPlaceLatLng = null;
+}
+
+function hideDoorPanel() {
+  document.getElementById('door-panel').style.display = 'none';
+  doorPlaceLatLng = null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ROOMS EXPORT / LOAD
+// ═══════════════════════════════════════════════════════════════════════════
+
+function updateQrUI() {
+  const n = qrExportData.length;
+  document.getElementById('qrCount').textContent  = n;
+  document.getElementById('exportQrBtn').disabled = n === 0;
+}
+
+/**
+ * Export qrExportData as rooms.json compatible with the app's RoomGistSync:
+ * [{ id, name, floor, lat, lon, alt }, …]
+ */
+function exportQrJSON() {
+  if (!qrExportData.length) return;
+  const blob = new Blob([JSON.stringify(qrExportData, null, 2)], { type: 'application/json' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = 'rooms.json';
+  a.click();
+  setStatus(`Exported rooms.json (${qrExportData.length} room${qrExportData.length !== 1 ? 's' : ''})`);
+}
+
+/**
+ * Load an existing rooms.json so new doors are appended rather than starting
+ * a fresh list — prevents accidentally deleting existing rooms.
+ *
+ * Accepts two formats:
+ *  • New Room format:  [{ id, name, floor, lat, lon, alt }]   ← canonical
+ *  • Legacy QrFeature: [{ id, properties: { QRId, name, floor, anchor: {
+ *      coordinates: [lon, lat, alt] } } }]  ← auto-converted on load
+ */
+function loadQrJSON(text) {
+  let data;
+  try { data = JSON.parse(text); } catch {
+    alert('Could not parse JSON — make sure this is a rooms.json file.');
+    return;
+  }
+  if (!Array.isArray(data)) {
+    alert('Expected a JSON array of rooms.');
+    return;
+  }
+  qrExportData = data.map(entry => {
+    // Already Room format
+    if (entry.lat !== undefined) return {
+      id:    entry.id    || entry.qrID || '',
+      name:  entry.name  || '',
+      floor: entry.floor || '1',
+      lat:   entry.lat   ?? 0,
+      lon:   entry.lon   ?? 0,
+      alt:   entry.alt   ?? 0,
+    };
+    // Legacy QrFeature — extract coordinates from anchor
+    const p   = entry.properties || {};
+    const crd = p.anchor?.coordinates || [0, 0, 0]; // [lon, lat, alt]
+    return {
+      id:    p.QRId  || entry.id || '',
+      name:  p.name  || '',
+      floor: p.floor || '1',
+      lat:   crd[1]  ?? 0,
+      lon:   crd[0]  ?? 0,
+      alt:   crd[2]  ?? 0,
+    };
+  });
+  updateQrUI();
+  setStatus(`Loaded ${qrExportData.length} existing room(s) — new doors will be appended`);
+}
+
+document.getElementById('qrFileInput').addEventListener('change', e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = ev => loadQrJSON(ev.target.result);
+  r.readAsText(f);
+  e.target.value = '';
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
 // STATS & STATUS
 // ═══════════════════════════════════════════════════════════════════════════
 function updateStats() {
@@ -1795,6 +2233,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'h' || e.key === 'H') { if (selected.size) hideSelected(); else unhideAll(); }
   if (e.key === 'Escape') {
     if (edgeFromId) { cancelEdgeConnect(); setStatus(MODE_HINTS.edge); }
+    else if (doorPlaceLatLng) { cancelDoorPlace(); }
     else { cancelFacingEdit(); cancelNodeMove(); deselect(); setMode('view'); }
   }
   if (e.key === 'z' && (e.ctrlKey||e.metaKey)) undo();

@@ -5,9 +5,6 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
-import android.os.Build
-import android.view.Surface
-import android.view.WindowManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.CircularProgressIndicator
@@ -27,7 +24,9 @@ import com.example.metaversearapp.data.NavGraphPathfinder
 import com.example.metaversearapp.ui.components.TiledMiniMap
 import com.example.metaversearapp.data.NavNode
 import com.example.metaversearapp.data.NodeType
-import com.example.metaversearapp.data.QrLocation
+import com.example.metaversearapp.data.Room
+import com.example.metaversearapp.data.RoomGistSync
+import com.example.metaversearapp.data.toRoomId
 import com.google.ar.core.Anchor
 import com.google.ar.core.Anchor.CloudAnchorState
 import com.google.ar.core.Config
@@ -35,10 +34,6 @@ import com.google.ar.core.GeospatialPose
 import com.google.ar.core.Pose
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
-import com.google.mlkit.vision.barcode.BarcodeScannerOptions
-import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
-import com.google.mlkit.vision.common.InputImage
 import io.github.sceneview.ar.ARSceneView
 import io.github.sceneview.rememberEngine
 import io.github.sceneview.ar.node.AnchorNode
@@ -146,19 +141,10 @@ internal fun AdminRecordingScreen(
         onDispose { sm.unregisterListener(listener) }
     }
 
-    // ── Door linking state ─────────────────────────────────────────────────────
-    // showDoorLinkDialog: room picker shown after marking a door node.
-    // isDoorScanActive:   camera scanning for the door's QR code (optional addon).
-    var showDoorLinkDialog by remember { mutableStateOf(false) }
-    var doorLinkCandidates by remember { mutableStateOf<List<Pair<QrLocation, Double>>>(emptyList()) }
-    var isDoorScanActive   by remember { mutableStateOf(false) }
+    // ── Door naming state ──────────────────────────────────────────────────────
+    // showDoorNameDialog: name-entry dialog shown after marking a node as DOOR.
+    var showDoorNameDialog by remember { mutableStateOf(false) }
     var pendingDoorNode    by remember { mutableStateOf<NavNode?>(null) }
-    var lastScanTime       by remember { mutableLongStateOf(0L) }
-
-    val scanner = remember {
-        val opts = BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
-        BarcodeScanning.getClient(opts)
-    }
 
     // GPS accumulator for floors that have no established canonical altitude yet.
     // Avoids anchoring the whole floor to a single potentially-noisy GPS reading.
@@ -194,7 +180,7 @@ internal fun AdminRecordingScreen(
      * For STAIR_TOP / STAIR_BOTTOM: also scans for the complementary stair
      * node on a different floor within [STAIR_CONNECT_RADIUS_M] and creates
      * a bridging edge so A* can route between floors across separate walks.
-     * For DOOR: surfaces [DoorLinkPickerDialog] when nearby QR anchors exist.
+     * For DOOR: opens [DoorNameDialog] so the admin can name the room.
      */
     fun markLastNodeAs(type: NodeType) {
         val node = lastRecordedNode ?: run {
@@ -270,13 +256,9 @@ internal fun AdminRecordingScreen(
             }
 
             if (type == NodeType.DOOR) {
-                val candidates = db.qrDao().getAll()
-                    .map { qr -> qr to NavGraphPathfinder.haversine(node.lat, node.lon, qr.lat, qr.lon) }
-                    .sortedBy { (_, dist) -> dist }
                 pendingDoorNode    = updated
-                doorLinkCandidates = candidates
-                showDoorLinkDialog = true
-                statusMsg          = "Link this door to a room, scan its QR, or skip"
+                showDoorNameDialog = true
+                statusMsg          = "Enter a name for this door/room"
             }
         }
     }
@@ -307,29 +289,36 @@ internal fun AdminRecordingScreen(
 
 
     /**
-     * Links [pendingDoorNode] to [qr], recording the room name and QR ID.
-     * GPS position is intentionally kept as-recorded — the admin physically stood
-     * at the door, so that position is more reliable than map-derived QR coordinates.
+     * Creates a [Room] from [pendingDoorNode] using [name] as the display name,
+     * updates the nav node with the generated room ID and label, and pushes the
+     * room to the rooms Gist so all users see the new destination on next launch.
      */
-    fun linkDoorToQr(qr: QrLocation) {
+    fun createDoorRoom(name: String) {
         val node = pendingDoorNode ?: return
-        val capturedFacingDeg = sensorHeading
+        val roomId = name.toRoomId()
         scope.launch {
             val linked = node.copy(
-                anchorQrId = qr.qrID,
-                label      = qr.name
+                anchorQrId = roomId,
+                label      = name
             )
             db.navDao().updateNode(linked)
             reweightEdgesForNode(linked)
             lastRecordedNode = linked
-            if (capturedFacingDeg != null) {
-                db.qrDao().updateFacingDeg(qr.qrID, capturedFacingDeg)
-            }
-            statusMsg = "Door linked to '${qr.name}'"
+
+            val room = Room(
+                id    = roomId,
+                name  = name,
+                floor = node.floor,
+                lat   = node.lat,
+                lon   = node.lon,
+                alt   = node.alt
+            )
+            val result = withContext(Dispatchers.IO) { RoomGistSync.addRoom(room) }
+            statusMsg = if (result.isSuccess) "Room '${name}' saved"
+                        else "Room saved locally — Gist sync failed"
         }
-        showDoorLinkDialog = false
+        showDoorNameDialog = false
         pendingDoorNode    = null
-        doorLinkCandidates = emptyList()
     }
 
     /**
@@ -540,70 +529,6 @@ internal fun AdminRecordingScreen(
                         }
                     }
 
-                    // ── Door QR scan (active only after admin taps "Scan QR") ────
-                    if (isDoorScanActive && now - lastScanTime > 1_000L) {
-                        try {
-                            if (currentLifecycleState == Lifecycle.State.RESUMED) {
-                                val image    = frame.acquireCameraImage()
-                                lastScanTime = now
-
-                                val rotation = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                                    context.display.rotation ?: Surface.ROTATION_0
-                                } else {
-                                    @Suppress("DEPRECATION")
-                                    (context.getSystemService(android.content.Context.WINDOW_SERVICE) as WindowManager)
-                                        .defaultDisplay.rotation
-                                }
-                                val inputImage = InputImage.fromMediaImage(
-                                    image,
-                                    when (rotation) {
-                                        Surface.ROTATION_90  -> 0
-                                        Surface.ROTATION_180 -> 270
-                                        Surface.ROTATION_270 -> 180
-                                        else                 -> 90
-                                    }
-                                )
-                                scanner.process(inputImage)
-                                    .addOnSuccessListener { barcodes ->
-                                        if (barcodes.isNotEmpty()) {
-                                            val qrId = barcodes[0].rawValue ?: return@addOnSuccessListener
-                                            val node = pendingDoorNode ?: return@addOnSuccessListener
-                                            val capturedHeading = sensorHeading
-                                            scope.launch {
-                                                val loc = db.qrDao().getById(qrId)
-                                                val linked = if (loc != null) {
-                                                    // Snap to QR's surveyed position so cross-session
-                                                    // door nodes all converge on the same coordinates.
-                                                    node.copy(
-                                                        anchorQrId = qrId,
-                                                        label      = loc.name,
-                                                        lat        = loc.lat,
-                                                        lon        = loc.lon,
-                                                        alt        = if (loc.alt != 0.0) loc.alt else node.alt
-                                                    )
-                                                } else {
-                                                    // QR not in room database — store ID only
-                                                    node.copy(anchorQrId = qrId)
-                                                }
-                                                db.navDao().updateNode(linked)
-                                                reweightEdgesForNode(linked)
-                                                lastRecordedNode = linked
-                                                if (capturedHeading != null && loc != null) {
-                                                    db.qrDao().updateFacingDeg(qrId, capturedHeading)
-                                                }
-                                                statusMsg = if (loc != null)
-                                                    "Door linked to '${loc.name}'"
-                                                else
-                                                    "QR stored — room not yet in database"
-                                                isDoorScanActive = false
-                                                pendingDoorNode  = null
-                                            }
-                                        }
-                                    }
-                                    .addOnCompleteListener { image.close() }
-                            }
-                        } catch (_: Exception) { /* Native buffer safety */ }
-                    }
                         } // end if TRACKING
                     } // end if earth != null
                 }
@@ -686,12 +611,6 @@ internal fun AdminRecordingScreen(
                 lastRecordedNode   = lastRecordedNode,
                 lastNodeType       = lastNodeType,
                 onMarkAs           = ::markLastNodeAs,
-                isDoorScanActive   = isDoorScanActive,
-                onCancelDoorScan   = {
-                    isDoorScanActive = false
-                    pendingDoorNode  = null
-                    statusMsg        = "Door QR scan cancelled"
-                },
                 isRecording        = isRecording,
                 onRecordToggle     = {
                     isRecording = !isRecording
@@ -739,24 +658,14 @@ internal fun AdminRecordingScreen(
         }
     }
 
-    // Room picker shown after marking a node as DOOR.
-    // "Scan QR" is an optional addon — triggers camera scanning and links the
-    // scanned QR's room (if in DB) or stores just the QR ID (if not yet).
-    if (showDoorLinkDialog) {
-        DoorLinkPickerDialog(
-            candidates = doorLinkCandidates,
-            onLink     = ::linkDoorToQr,
-            onScanQr   = {
-                showDoorLinkDialog = false
-                doorLinkCandidates = emptyList()
-                isDoorScanActive   = true
-                statusMsg          = "Point camera at the door's QR code…"
-            },
-            onDismiss  = {
-                showDoorLinkDialog = false
+    // Name dialog shown after marking a node as DOOR.
+    if (showDoorNameDialog) {
+        DoorNameDialog(
+            onConfirm = ::createDoorRoom,
+            onDismiss = {
+                showDoorNameDialog = false
                 pendingDoorNode    = null
-                doorLinkCandidates = emptyList()
-                statusMsg          = "Door marked — GPS only"
+                statusMsg          = "Door marked — name skipped"
             }
         )
     }
