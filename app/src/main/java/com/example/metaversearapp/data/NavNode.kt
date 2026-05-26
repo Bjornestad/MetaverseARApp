@@ -39,6 +39,7 @@ data class NavNode(
     val lon: Double,
     val alt: Double = 0.0,
     val floor: String = "1",
+    val building: String = "",
     val anchorQrId: String? = null,
     val label: String = "",
     val type: NodeType = NodeType.WAYPOINT,

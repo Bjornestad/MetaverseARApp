@@ -52,6 +52,8 @@ import java.util.UUID
 @Composable
 internal fun AdminRecordingScreen(
     db: AppDatabase,
+    currentBuilding: String,
+    onBuildingChange: (String) -> Unit,
     currentFloor: String,
     onFloorChange: (String) -> Unit,
     onFinished: () -> Unit
@@ -154,19 +156,19 @@ internal fun AdminRecordingScreen(
     // When the floor changes during recording: load the table value first (preferred),
     // fall back to node median, reset the GPS accumulator for this floor so samples
     // don't carry over from a previous visit this session.
-    LaunchedEffect(currentFloor) {
+    LaunchedEffect(currentBuilding, currentFloor) {
         if (!isRecording) return@LaunchedEffect
         floorGpsAccumulator.remove(currentFloor)
-        val tableAlt = withContext(Dispatchers.IO) { db.floorAltDao().getAlt(currentFloor) }
+        val tableAlt = withContext(Dispatchers.IO) { db.floorAltDao().getAlt(currentBuilding, currentFloor) }
         currentFloorAlt = tableAlt ?: run {
             val nodeMedian = withContext(Dispatchers.IO) { db.navDao().getAllNodes() }
-                .filter { it.floor == currentFloor }
+                .filter { it.building == currentBuilding && it.floor == currentFloor }
                 .map { it.alt }
                 .takeIf { it.isNotEmpty() }
                 ?.sorted()?.let { it[it.size / 2] }
             if (nodeMedian != null) {
                 withContext(Dispatchers.IO) {
-                    db.floorAltDao().upsert(FloorAltitude(currentFloor, nodeMedian))
+                    db.floorAltDao().upsert(FloorAltitude(currentBuilding, currentFloor, nodeMedian))
                 }
             }
             nodeMedian
@@ -421,7 +423,7 @@ internal fun AdminRecordingScreen(
                                 val median = acc.sorted().let { it[it.size / 2] }
                                 currentFloorAlt = median
                                 scope.launch {
-                                    db.floorAltDao().upsert(FloorAltitude(currentFloor, median))
+                                    db.floorAltDao().upsert(FloorAltitude(currentBuilding, currentFloor, median))
                                 }
                                 statusMsg = "Floor altitude locked — recording"
                                 median
@@ -473,11 +475,12 @@ internal fun AdminRecordingScreen(
                                 } else {
                                     // ── New node: this position has no existing coverage ──
                                     val newNode  = NavNode(
-                                        id    = UUID.randomUUID().toString(),
-                                        lat   = corrLat,
-                                        lon   = corrLon,
-                                        alt   = corrAlt,
-                                        floor = currentFloor
+                                        id       = UUID.randomUUID().toString(),
+                                        lat      = corrLat,
+                                        lon      = corrLon,
+                                        alt      = corrAlt,
+                                        floor    = currentFloor,
+                                        building = currentBuilding
                                     )
                                     val prevNode     = lastRecordedNode
                                     lastRecordedNode = newNode
@@ -606,6 +609,8 @@ internal fun AdminRecordingScreen(
                 earthTrackingState = earthTrackingState,
             )
             RecordingControlsPanel(
+                currentBuilding    = currentBuilding,
+                onBuildingChange   = onBuildingChange,
                 currentFloor       = currentFloor,
                 onFloorChange      = onFloorChange,
                 lastRecordedNode   = lastRecordedNode,
@@ -624,18 +629,17 @@ internal fun AdminRecordingScreen(
                             // Prefer the table's canonical altitude — it is the stable value
                             // established at first recording. Fall back to node median, then
                             // null (GPS accumulator in capture loop handles a brand-new floor).
-                            val tableAlt = withContext(Dispatchers.IO) { db.floorAltDao().getAlt(currentFloor) }
+                            val tableAlt = withContext(Dispatchers.IO) { db.floorAltDao().getAlt(currentBuilding, currentFloor) }
                             currentFloorAlt = tableAlt ?: run {
                                 val nodeMedian = preloadedNodes
-                                    .filter { it.floor == currentFloor }
+                                    .filter { it.building == currentBuilding && it.floor == currentFloor }
                                     .map { it.alt }
                                     .takeIf { it.isNotEmpty() }
                                     ?.sorted()?.let { it[it.size / 2] }
-                                // Persist the node median so QR calibration uses the
-                                // same value and the table is ready for next session.
+                                // Persist the node median so it's ready for the next session.
                                 if (nodeMedian != null) {
                                     withContext(Dispatchers.IO) {
-                                        db.floorAltDao().upsert(FloorAltitude(currentFloor, nodeMedian))
+                                        db.floorAltDao().upsert(FloorAltitude(currentBuilding, currentFloor, nodeMedian))
                                     }
                                 }
                                 nodeMedian

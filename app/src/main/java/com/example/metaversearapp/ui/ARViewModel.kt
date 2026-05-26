@@ -383,8 +383,9 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
                 // nodes were recorded with, so (node.alt - refAlt) ≈ 0 for same-floor nodes
                 // and arrows land exactly at floor level.  Fall back to the QrLocation's GPS
                 // altitude if the table has no entry for this floor yet.
-                val refAlt = withContext(Dispatchers.IO) { db.floorAltDao().getAlt(loc.floor) }
-                    ?: loc.alt
+                val refAlt = withContext(Dispatchers.IO) {
+                    db.floorAltDao().getAlt(doorNode?.building ?: "", loc.floor)
+                } ?: loc.alt
 
                 latOffset = scanPose.latitude - refLat
                 lonOffset = scanPose.longitude - refLon

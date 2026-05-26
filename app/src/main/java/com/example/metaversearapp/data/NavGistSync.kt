@@ -86,7 +86,7 @@ object NavGistSync {
     suspend fun upload(
         nodes: List<NavNode>,
         edges: List<NavEdge>,
-        floorAltitudes: Map<String, Double> = emptyMap()
+        floorAltitudes: List<FloorAltitude> = emptyList()
     ): Result<Unit> {
         val gistId = resolveGistId(BuildConfig.NAV_GRAPH_GIST_ID)
         val token  = BuildConfig.GITHUB_TOKEN

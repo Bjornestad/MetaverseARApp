@@ -1,25 +1,39 @@
 package com.example.metaversearapp.data
 
 import androidx.room.*
+import kotlinx.serialization.Serializable
 
 /**
- * Canonical GPS altitude for each recorded floor label.
- * Written once (first 5 GPS samples on a new floor) and never overwritten by
- * subsequent sessions, so all nodes and calibration share the same reference.
+ * Canonical GPS altitude for a specific (building, floor) pair.
+ *
+ * Buildings at a university have completely different floor heights, so altitude
+ * must be tracked per-building rather than globally per floor label.
+ *
+ * Written once (from the median of the first 5 GPS samples) and never
+ * overwritten by subsequent sessions — all nodes and calibration in that
+ * building share the same stable reference altitude.
+ *
+ * [building] defaults to "" for nodes recorded before the building field was
+ * introduced, keeping backward compatibility with older DB rows.
  */
-@Entity(tableName = "floor_altitudes")
+@Serializable
+@Entity(
+    tableName    = "floor_altitudes",
+    primaryKeys  = ["building", "floor"]
+)
 data class FloorAltitude(
-    @PrimaryKey val floor: String,
-    val alt: Double
+    val building: String = "",
+    val floor:    String,
+    val alt:      Double
 )
 
 @Dao
 interface FloorAltDao {
-    @Query("SELECT * FROM floor_altitudes ORDER BY floor ASC")
+    @Query("SELECT * FROM floor_altitudes ORDER BY building ASC, floor ASC")
     suspend fun getAll(): List<FloorAltitude>
 
-    @Query("SELECT alt FROM floor_altitudes WHERE floor = :floor LIMIT 1")
-    suspend fun getAlt(floor: String): Double?
+    @Query("SELECT alt FROM floor_altitudes WHERE building = :building AND floor = :floor LIMIT 1")
+    suspend fun getAlt(building: String, floor: String): Double?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(fa: FloorAltitude)

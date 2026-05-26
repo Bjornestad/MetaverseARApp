@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.metaversearapp.data.AppDatabase
 import com.example.metaversearapp.data.FloorAltitude
+import com.example.metaversearapp.data.FloorAltitude
 import com.example.metaversearapp.data.NavGistSync
 import com.example.metaversearapp.data.NavGraphExport
 import com.example.metaversearapp.data.NavNode
@@ -89,8 +90,8 @@ internal fun AdminHubScreen(
                     export.edges.forEach { db.navDao().insertEdge(it) }
                     // Floor altitudes from the Gist are the canonical values — upsert so all
                     // devices share the same reference altitude for each floor.
-                    export.floorAltitudes.forEach { (floor, alt) ->
-                        db.floorAltDao().upsert(FloorAltitude(floor, alt))
+                    export.floorAltitudes.forEach { fa ->
+                        db.floorAltDao().upsert(fa)
                     }
                 }
             }
@@ -107,10 +108,16 @@ internal fun AdminHubScreen(
         withContext(Dispatchers.IO) {
             if (db.floorAltDao().getAll().isEmpty()) {
                 db.navDao().getAllNodes()
-                    .groupBy { it.floor }
-                    .forEach { (floor, nodes) ->
+                    .groupBy { Pair(it.building, it.floor) }
+                    .forEach { (key, nodes) ->
                         val sorted = nodes.map { it.alt }.sorted()
-                        db.floorAltDao().upsert(FloorAltitude(floor, sorted[sorted.size / 2]))
+                        db.floorAltDao().upsert(
+                            FloorAltitude(
+                                building = key.first,
+                                floor    = key.second,
+                                alt      = sorted[sorted.size / 2]
+                            )
+                        )
                     }
             }
         }
@@ -205,11 +212,10 @@ internal fun AdminHubScreen(
                     scope.launch {
                         isUploading  = true
                         uploadStatus = "Uploading…"
-                        val nodes        = db.navDao().getAllNodes()
-                        val edges        = db.navDao().getAllEdges()
-                        val floorAlts    = db.floorAltDao().getAll()
-                            .associate { it.floor to it.alt }
-                        val result = NavGistSync.upload(nodes, edges, floorAlts)
+                        val nodes     = db.navDao().getAllNodes()
+                        val edges     = db.navDao().getAllEdges()
+                        val floorAlts = db.floorAltDao().getAll()
+                        val result    = NavGistSync.upload(nodes, edges, floorAlts)
                         isUploading  = false
                         uploadStatus = result.fold(
                             onSuccess = { "✓ Uploaded ${nodes.size} nodes, ${edges.size} edges to Gist" },

@@ -138,6 +138,8 @@ internal fun RecordingTopHud(
  */
 @Composable
 internal fun RecordingControlsPanel(
+    currentBuilding:   String,
+    onBuildingChange:  (String) -> Unit,
     currentFloor:      String,
     onFloorChange:     (String) -> Unit,
     lastRecordedNode:  NavNode?,
@@ -154,7 +156,7 @@ internal fun RecordingControlsPanel(
         modifier            = Modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        FloorSelectorCard(currentFloor, onFloorChange)
+        BuildingFloorSelectorCard(currentBuilding, onBuildingChange, currentFloor, onFloorChange)
         MarkWaypointCard(lastRecordedNode, lastNodeType, onMarkAs)
         RecordingActionBar(
             isRecording       = isRecording,
@@ -169,36 +171,73 @@ internal fun RecordingControlsPanel(
 
 /** Compact single-row floor selector. */
 @Composable
-private fun FloorSelectorCard(currentFloor: String, onFloorChange: (String) -> Unit) {
+private fun BuildingFloorSelectorCard(
+    currentBuilding:  String,
+    onBuildingChange: (String) -> Unit,
+    currentFloor:     String,
+    onFloorChange:    (String) -> Unit,
+) {
     Card(
         colors   = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.8f)),
         shape    = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
-        Row(
-            modifier              = Modifier
-                .padding(horizontal = 10.dp, vertical = 6.dp)
-                .fillMaxWidth(),
-            verticalAlignment     = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text("Floor", color = Color.Gray, fontSize = 11.sp)
-            Spacer(Modifier.width(2.dp))
-            FLOOR_OPTIONS.forEach { fl ->
-                val selected = currentFloor == fl
-                Surface(
-                    onClick = { onFloorChange(fl) },
-                    shape   = RoundedCornerShape(6.dp),
-                    color   = if (selected) Color(0xFF64FFDA) else Color.White.copy(alpha = 0.08f),
-                    modifier = Modifier.size(width = 30.dp, height = 26.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(
-                            fl,
-                            fontSize   = 10.sp,
-                            color      = if (selected) Color.Black else Color.White.copy(alpha = 0.7f),
-                            fontFamily = FontFamily.Monospace
-                        )
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+
+            // ── Building text field ──────────────────────────────────────────
+            Row(
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier              = Modifier.fillMaxWidth()
+            ) {
+                Text("Building", color = Color.Gray, fontSize = 11.sp, modifier = Modifier.width(52.dp))
+                OutlinedTextField(
+                    value         = currentBuilding,
+                    onValueChange = onBuildingChange,
+                    placeholder   = { Text("e.g. Realfagbygget", color = Color.Gray, fontSize = 11.sp) },
+                    singleLine    = true,
+                    textStyle     = androidx.compose.ui.text.TextStyle(
+                        fontSize = 12.sp,
+                        color    = Color.White
+                    ),
+                    colors        = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor   = Color(0xFF64FFDA),
+                        unfocusedBorderColor = Color(0xFF444444),
+                        focusedTextColor     = Color.White,
+                        unfocusedTextColor   = Color.White,
+                        cursorColor          = Color(0xFF64FFDA)
+                    ),
+                    modifier      = Modifier
+                        .weight(1f)
+                        .height(40.dp)
+                )
+            }
+
+            Spacer(Modifier.height(6.dp))
+
+            // ── Floor chips ──────────────────────────────────────────────────
+            Row(
+                verticalAlignment     = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier              = Modifier.fillMaxWidth()
+            ) {
+                Text("Floor", color = Color.Gray, fontSize = 11.sp, modifier = Modifier.width(52.dp))
+                FLOOR_OPTIONS.forEach { fl ->
+                    val selected = currentFloor == fl
+                    Surface(
+                        onClick  = { onFloorChange(fl) },
+                        shape    = RoundedCornerShape(6.dp),
+                        color    = if (selected) Color(0xFF64FFDA) else Color.White.copy(alpha = 0.08f),
+                        modifier = Modifier.size(width = 30.dp, height = 26.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                fl,
+                                fontSize   = 10.sp,
+                                color      = if (selected) Color.Black else Color.White.copy(alpha = 0.7f),
+                                fontFamily = FontFamily.Monospace
+                            )
+                        }
                     }
                 }
             }

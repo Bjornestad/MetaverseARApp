@@ -8,7 +8,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [QrLocation::class, NavNode::class, NavEdge::class, FloorAltitude::class],
-    version = 8,
+    version = 9,
     exportSchema = false
 )
 @TypeConverters(NodeTypeConverter::class)
@@ -77,5 +77,37 @@ val MIGRATION_7_8 = object : Migration(7, 8) {
         database.execSQL(
             "CREATE TABLE IF NOT EXISTS floor_altitudes (floor TEXT NOT NULL PRIMARY KEY, alt REAL NOT NULL)"
         )
+    }
+}
+
+/**
+ * Adds per-building floor altitude support.
+ *
+ * 1. Adds [NavNode.building] column (default "" for all existing nodes so they
+ *    continue to belong to the implicit "unknown building").
+ * 2. Recreates [floor_altitudes] with a composite primary key (building, floor).
+ *    Existing single-floor rows are migrated with building = "".
+ */
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(database: SupportSQLiteDatabase) {
+        // Add building column to nav_nodes
+        database.execSQL(
+            "ALTER TABLE nav_nodes ADD COLUMN building TEXT NOT NULL DEFAULT ''"
+        )
+        // Recreate floor_altitudes with composite PK (building, floor)
+        database.execSQL(
+            "CREATE TABLE floor_altitudes_new (" +
+            "building TEXT NOT NULL DEFAULT '', " +
+            "floor TEXT NOT NULL, " +
+            "alt REAL NOT NULL, " +
+            "PRIMARY KEY (building, floor))"
+        )
+        // Migrate existing rows, assigning them to the empty-string building
+        database.execSQL(
+            "INSERT INTO floor_altitudes_new (building, floor, alt) " +
+            "SELECT '', floor, alt FROM floor_altitudes"
+        )
+        database.execSQL("DROP TABLE floor_altitudes")
+        database.execSQL("ALTER TABLE floor_altitudes_new RENAME TO floor_altitudes")
     }
 }

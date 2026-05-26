@@ -22,7 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.metaversearapp.data.QrLocation
+import com.example.metaversearapp.data.Room
 import com.example.metaversearapp.ui.ARViewModel
 import com.google.ar.core.GeospatialPose
 import com.google.ar.core.TrackingState
@@ -150,7 +150,7 @@ fun StatusOverlay(
 }
 
 @Composable
-fun NavigationArrow(currentPose: GeospatialPose, destination: QrLocation, latOffset: Double, lonOffset: Double) {
+fun NavigationArrow(currentPose: GeospatialPose, destination: Room, latOffset: Double, lonOffset: Double) {
     val targetLat = destination.lat + latOffset
     val targetLon = destination.lon + lonOffset
     val lat1 = Math.toRadians(currentPose.latitude)

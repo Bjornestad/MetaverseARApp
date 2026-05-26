@@ -41,14 +41,16 @@ private data class GistFileContent(val content: String)
 // ── Sync object ───────────────────────────────────────────────────────────────
 
 /**
- * Handles uploading and downloading the room list to/from a dedicated GitHub Gist.
+ * Uploads and downloads the room list as `rooms.json` inside the same Gist
+ * used by [NavGistSync] (identified by [BuildConfig.NAV_GRAPH_GIST_ID]).
+ * Patching only touches the file listed in the request, so navgraph.json
+ * and rooms.json never overwrite each other.
  *
- * The file stored in the Gist is always named `rooms.json` and contains a
- * JSON array of [Room] objects: `[{id, name, floor, lat, lon, alt}, …]`.
+ * The file contains a JSON array of [Room] objects: `[{id, name, floor, lat, lon, alt}, …]`.
  *
  * Secrets are injected at build time from `local.properties`:
- *   - `BuildConfig.GITHUB_TOKEN`    — PAT with Gists read + write
- *   - `BuildConfig.ROOMS_GIST_ID`   — ID (or URL) of the rooms Gist
+ *   - `BuildConfig.GITHUB_TOKEN`      — PAT with Gists read + write
+ *   - `BuildConfig.NAV_GRAPH_GIST_ID` — ID (or URL) of the shared Gist
  */
 object RoomGistSync {
 
@@ -71,9 +73,9 @@ object RoomGistSync {
      * or is empty — this lets the first [addRoom] call bootstrap the file.
      */
     suspend fun download(): Result<List<Room>> {
-        val gistId = resolveGistId(BuildConfig.ROOMS_GIST_ID)
+        val gistId = resolveGistId(BuildConfig.NAV_GRAPH_GIST_ID)
         if (gistId.isBlank()) {
-            return Result.failure(IllegalStateException("ROOMS_GIST_ID is not set in local.properties"))
+            return Result.failure(IllegalStateException("NAV_GRAPH_GIST_ID is not set in local.properties"))
         }
 
         return try {
@@ -116,11 +118,11 @@ object RoomGistSync {
      * Replaces the entire rooms list in the Gist with [rooms].
      */
     suspend fun upload(rooms: List<Room>): Result<Unit> {
-        val gistId = resolveGistId(BuildConfig.ROOMS_GIST_ID)
+        val gistId = resolveGistId(BuildConfig.NAV_GRAPH_GIST_ID)
         val token  = BuildConfig.GITHUB_TOKEN
         if (gistId.isBlank() || token.isBlank()) {
             return Result.failure(
-                IllegalStateException("ROOMS_GIST_ID or GITHUB_TOKEN not set in local.properties")
+                IllegalStateException("NAV_GRAPH_GIST_ID or GITHUB_TOKEN not set in local.properties")
             )
         }
 

@@ -16,15 +16,16 @@ import com.example.metaversearapp.ui.admin.PinGateScreen
  *  - [AdminHubScreen]       — stats, upload, export (authenticated, not recording)
  *  - [AdminRecordingScreen] — live AR recording session
  *
- * [currentFloor] is hoisted here so the selected floor persists across
- * recording sessions (AdminRecordingScreen is destroyed on finish, which
- * would otherwise reset the floor back to its default).
+ * [currentBuilding] and [currentFloor] are hoisted here so they persist
+ * across recording sessions — the admin doesn't have to re-enter them every
+ * time they tap "Start Recording Walk".
  */
 @Composable
 fun AdminScreen(db: AppDatabase, onExitAdmin: () -> Unit) {
-    var isAuthenticated by rememberSaveable { mutableStateOf(false) }
-    var isRecording     by rememberSaveable { mutableStateOf(false) }
-    var currentFloor    by rememberSaveable { mutableStateOf("1") }
+    var isAuthenticated  by rememberSaveable { mutableStateOf(false) }
+    var isRecording      by rememberSaveable { mutableStateOf(false) }
+    var currentBuilding  by rememberSaveable { mutableStateOf("") }
+    var currentFloor     by rememberSaveable { mutableStateOf("1") }
 
     // Back gesture / button handling:
     //  - During a recording session → stop recording and return to the hub
@@ -46,10 +47,12 @@ fun AdminScreen(db: AppDatabase, onExitAdmin: () -> Unit) {
         )
     } else {
         AdminRecordingScreen(
-            db            = db,
-            currentFloor  = currentFloor,
-            onFloorChange = { currentFloor = it },
-            onFinished    = { isRecording = false }
+            db               = db,
+            currentBuilding  = currentBuilding,
+            onBuildingChange = { currentBuilding = it },
+            currentFloor     = currentFloor,
+            onFloorChange    = { currentFloor = it },
+            onFinished       = { isRecording = false }
         )
     }
 }
