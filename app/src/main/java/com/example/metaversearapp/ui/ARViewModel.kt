@@ -64,6 +64,33 @@ class ARViewModel(private val db: AppDatabase) : ViewModel() {
         statusText    = "Calibration reset — scan a QR or wait for cloud anchor"
     }
 
+    /**
+     * Nudges the calibration offsets by the given amounts so arrows shift in the
+     * desired physical direction.  Metres are converted to degrees using the
+     * current GPS position for accuracy (lon degrees shrink near the poles).
+     *
+     * Positive [northM] → arrows move north.
+     * Positive [eastM]  → arrows move east.
+     * Positive [upM]    → arrows move up (alt).
+     *
+     * Triggers a path recompute so arrow positions update immediately.
+     */
+    fun nudgeArrows(northM: Double = 0.0, eastM: Double = 0.0, upM: Double = 0.0) {
+        val lat = geospatialPose?.latitude ?: 0.0
+        latOffset += northM / 111_320.0
+        lonOffset += eastM  / (111_320.0 * cos(Math.toRadians(lat)).coerceAtLeast(0.001))
+        altOffset += upM
+        computeDestinationPath()
+    }
+
+    /**
+     * Rotates the heading offset by [deltaDeg] degrees.
+     * Positive = clockwise (arrows rotate right); negative = counter-clockwise.
+     */
+    fun nudgeHeading(deltaDeg: Double) {
+        headingOffset = ((headingOffset + deltaDeg) + 360.0) % 360.0
+    }
+
     fun dismissArrivalBanner() {
         showArrivalBanner    = false
         selectedDestination  = null

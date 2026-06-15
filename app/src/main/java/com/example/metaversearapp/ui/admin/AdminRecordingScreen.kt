@@ -395,7 +395,7 @@ internal fun AdminRecordingScreen(
                     config.cloudAnchorMode = Config.CloudAnchorMode.ENABLED
                     config.focusMode       = Config.FocusMode.AUTO
                 },
-                onSessionUpdated = { session, frame ->
+                onSessionUpdated = frameLoop@{ session, frame ->
                     // Capture session + camera pose for cloud anchor hosting
                     arSession      = session
                     lastCameraPose = frame.camera.pose
@@ -446,7 +446,7 @@ internal fun AdminRecordingScreen(
                             if (hAcc > capturePrecisionM) {
                                 lastCaptureTime = now   // prevent rapid-fire status updates
                                 statusMsg = "Waiting for VPS (±${String.format("%.1f", hAcc)}m > ${capturePrecisionM.toInt()}m)…"
-                                return@onSessionUpdated
+                                return@frameLoop
                             }
 
                             // Distance from the last node placed in this session.

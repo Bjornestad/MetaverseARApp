@@ -1,5 +1,4 @@
 package com.example.metaversearapp.ui.components
-
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.horizontalScroll
@@ -183,6 +182,18 @@ fun ARUiOverlay(
                     .align(Alignment.BottomStart)
                     .padding(start = 16.dp, bottom = 216.dp)
                     .width(130.dp)
+            )
+        }
+
+        // ── BOTTOM-RIGHT: arrow nudge panel (debug only) ──────────────────────
+        // Mirrors the minimap position on the right side.  Collapsed by default
+        // so it's only a small header until the user taps ▼ to expand it.
+        if (showDebug) {
+            ArrowNudgePanel(
+                viewModel = viewModel,
+                modifier  = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 82.dp)
             )
         }
 
@@ -746,7 +757,7 @@ fun DestinationSelector(viewModel: ARViewModel) {
                                                 fontSize = 14.sp
                                             )
                                             Text(
-                                                "${loc.building}  ·  Floor ${loc.floor}",
+                                                "Floor ${loc.floor}",
                                                 color    = Color.Gray,
                                                 fontSize = 11.sp
                                             )
@@ -773,3 +784,161 @@ fun DestinationSelector(viewModel: ARViewModel) {
         )
     }
 }
+
+// ── Arrow nudge panel ─────────────────────────────────────────────────────────
+
+/**
+ * Compact debug panel for manually adjusting the VPS calibration offsets so
+ * AR arrows move into their correct physical positions.
+ *
+ * Controls:
+ *  • Step chips  — 0.1 m / 0.5 m / 1.0 m per tap (spatial nudge step)
+ *  • N / S / E / W buttons — shift all arrows in that compass direction
+ *  • Up / Down   — shift arrows vertically (alt offset)
+ *  • Hdg ← / →  — rotate heading offset by 1° per tap
+ *
+ * The panel is collapsible so it doesn't obstruct the AR view when not in use.
+ */
+@Composable
+fun ArrowNudgePanel(
+    viewModel: ARViewModel,
+    modifier:  Modifier = Modifier
+) {
+    var expanded  by remember { mutableStateOf(false) }
+    var stepM     by remember { mutableStateOf(0.5) }
+
+    val panelBg   = Color(0xFF0D1117).copy(alpha = 0.88f)
+    val accent    = Color(0xFF64FFDA)
+    val btnBorder = Color(0xFF2A2A3E)
+
+    Card(
+        modifier = modifier.width(148.dp),
+        shape    = RoundedCornerShape(10.dp),
+        colors   = CardDefaults.cardColors(containerColor = panelBg),
+        border   = BorderStroke(1.dp, btnBorder)
+    ) {
+        Column(
+            modifier            = Modifier.padding(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            // ── Header row ────────────────────────────────────────────────────
+            Row(
+                modifier              = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment     = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Nudge Arrows",
+                    color      = accent,
+                    fontSize   = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                TextButton(
+                    onClick      = { expanded = !expanded },
+                    contentPadding = PaddingValues(0.dp),
+                    modifier     = Modifier.height(20.dp)
+                ) {
+                    Text(
+                        if (expanded) "▲" else "▼",
+                        color    = accent.copy(alpha = 0.7f),
+                        fontSize = 10.sp
+                    )
+                }
+            }
+
+            if (expanded) {
+                // ── Step size chips ───────────────────────────────────────────
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Text("Step", color = Color.Gray, fontSize = 9.sp)
+                    listOf(0.1, 0.5, 1.0).forEach { s ->
+                        val sel = stepM == s
+                        Surface(
+                            onClick  = { stepM = s },
+                            shape    = RoundedCornerShape(4.dp),
+                            color    = if (sel) accent else Color.White.copy(alpha = 0.08f),
+                            modifier = Modifier.size(width = 32.dp, height = 20.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    if (s == 1.0) "1m" else "${s}m",
+                                    color    = if (sel) Color.Black else Color.White.copy(alpha = 0.7f),
+                                    fontSize = 9.sp,
+                                    fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // ── Compass rose (N / W·E / S) ────────────────────────────────
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    NudgeBtn("N") { viewModel.nudgeArrows(northM =  stepM) }
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(20.dp),
+                        verticalAlignment     = Alignment.CenterVertically
+                    ) {
+                        NudgeBtn("W") { viewModel.nudgeArrows(eastM = -stepM) }
+                        NudgeBtn("E") { viewModel.nudgeArrows(eastM =  stepM) }
+                    }
+                    NudgeBtn("S") { viewModel.nudgeArrows(northM = -stepM) }
+                }
+
+                // ── Altitude row ──────────────────────────────────────────────
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Text("Alt", color = Color.Gray, fontSize = 9.sp)
+                    NudgeBtn("▲") { viewModel.nudgeArrows(upM =  stepM) }
+                    NudgeBtn("▼") { viewModel.nudgeArrows(upM = -stepM) }
+                }
+
+                // ── Heading row ───────────────────────────────────────────────
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment     = Alignment.CenterVertically
+                ) {
+                    Text("Hdg", color = Color.Gray, fontSize = 9.sp)
+                    NudgeBtn("↺") { viewModel.nudgeHeading(-1.0) }
+                    NudgeBtn("↻") { viewModel.nudgeHeading( 1.0) }
+                }
+
+                // ── Current offset readout ────────────────────────────────────
+                val dLat = viewModel.latOffset * 111_320.0
+                val dLon = viewModel.lonOffset * 111_320.0
+                Text(
+                    "N${fmtM(dLat)} E${fmtM(dLon)} U${fmtM(viewModel.altOffset)}" +
+                    "  Hdg${fmtDeg(viewModel.headingOffset)}",
+                    color    = Color.White.copy(alpha = 0.45f),
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Normal
+                )
+            }
+        }
+    }
+}
+
+/** Compact square button used in [ArrowNudgePanel]. */
+@Composable
+private fun NudgeBtn(label: String, onClick: () -> Unit) {
+    OutlinedIconButton(
+        onClick  = onClick,
+        modifier = Modifier.size(32.dp),
+        colors   = IconButtonDefaults.outlinedIconButtonColors(
+            contentColor = Color.White.copy(alpha = 0.85f)
+        ),
+        border   = BorderStroke(1.dp, Color(0xFF2A2A3E))
+    ) {
+        Text(label, fontSize = 11.sp, color = Color.White.copy(alpha = 0.85f))
+    }
+}
+
+private fun fmtM(metres: Double)  = String.format("%+.1fm", metres)
+private fun fmtDeg(deg: Double)   = String.format("%+.1f°", deg)
