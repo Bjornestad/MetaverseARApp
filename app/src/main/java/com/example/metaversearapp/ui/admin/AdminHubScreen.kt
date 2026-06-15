@@ -49,6 +49,10 @@ internal fun AdminHubScreen(
     var uploadStatus by remember { mutableStateOf("") }
     var isUploading  by remember { mutableStateOf(false) }
 
+    // Force-sync from Gist
+    var isForceSyncing  by remember { mutableStateOf(false) }
+    var forceSyncStatus by remember { mutableStateOf("") }
+
     // Door / room management
     var doorNodes       by remember { mutableStateOf<List<NavNode>>(emptyList()) }
     var showDoorMgmtDlg by remember { mutableStateOf(false) }
@@ -251,6 +255,78 @@ internal fun AdminHubScreen(
                 Text(
                     uploadStatus,
                     color    = if (uploadStatus.startsWith("✓")) Color(0xFF64FFDA) else Color(0xFFFF6B6B),
+                    fontSize = 12.sp
+                )
+            }
+
+            // Force-sync from Gist
+            OutlinedButton(
+                onClick = {
+                    scope.launch {
+                        isForceSyncing  = true
+                        forceSyncStatus = ""
+                        // Pull nav graph
+                        val navResult = withContext(Dispatchers.IO) { NavGistSync.download() }
+                        if (navResult.isSuccess) {
+                            val export = navResult.getOrThrow()
+                            withContext(Dispatchers.IO) {
+                                val localNodes = db.navDao().getAllNodes().associateBy { it.id }
+                                export.nodes.forEach { gistNode ->
+                                    val local = localNodes[gistNode.id]
+                                    val toInsert = if (local?.anchorQrId != null &&
+                                                      local.anchorQrId != gistNode.anchorQrId) {
+                                        gistNode.copy(anchorQrId = local.anchorQrId, label = local.label)
+                                    } else gistNode
+                                    db.navDao().insertNode(toInsert)
+                                }
+                                export.edges.forEach { db.navDao().insertEdge(it) }
+                                db.navDao().pruneOrphanEdges()
+                                export.floorAltitudes.forEach { db.floorAltDao().upsert(it) }
+                                if (export.walls.isNotEmpty()) {
+                                    db.navWallDao().clearAll()
+                                    db.navWallDao().upsertAll(export.walls)
+                                }
+                            }
+                            // Pull rooms
+                            withContext(Dispatchers.IO) { RoomGistSync.download() }
+                            // Refresh local counts
+                            nodeCount = withContext(Dispatchers.IO) { db.navDao().nodeCount() }
+                            edgeCount = withContext(Dispatchers.IO) { db.navDao().edgeCount() }
+                            doorNodes = withContext(Dispatchers.IO) { db.navDao().getNodesByType(NodeType.DOOR.name) }
+                            forceSyncStatus = "✓ Synced — ${export.nodes.size} nodes, " +
+                                "${export.edges.size} edges, ${export.walls.size} wall(s)"
+                        } else {
+                            val msg = navResult.exceptionOrNull()?.message
+                                ?: navResult.exceptionOrNull()?.javaClass?.simpleName
+                                ?: "Unknown error"
+                            forceSyncStatus = "✗ Sync failed: $msg"
+                        }
+                        isForceSyncing = false
+                    }
+                },
+                enabled  = !isForceSyncing,
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape    = RoundedCornerShape(12.dp),
+                colors   = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF64FFDA)),
+                border   = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF64FFDA))
+            ) {
+                if (isForceSyncing) {
+                    CircularProgressIndicator(
+                        color       = Color(0xFF64FFDA),
+                        modifier    = Modifier.size(18.dp),
+                        strokeWidth = 2.dp
+                    )
+                } else {
+                    Icon(Icons.Default.CloudDownload, contentDescription = null)
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (isForceSyncing) "Syncing…" else "Force Sync from Gist")
+            }
+
+            if (forceSyncStatus.isNotEmpty()) {
+                Text(
+                    forceSyncStatus,
+                    color    = if (forceSyncStatus.startsWith("✓")) Color(0xFF64FFDA) else Color(0xFFFF6B6B),
                     fontSize = 12.sp
                 )
             }
